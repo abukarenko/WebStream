@@ -10,34 +10,64 @@
       <ColumnDefinition Width="*" />
     </Grid.ColumnDefinitions>
 
-    <Border Grid.Column="0" Background="{StaticResource Panel}" CornerRadius="16" Padding="18">
+    <Border Grid.Column="0" Background="{StaticResource Panel}" CornerRadius="16" Padding="14">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Top" Text="WEBSTREAM" FontWeight="Bold" FontSize="19" Foreground="{StaticResource Accent}" Margin="0,0,0,28" />
-        <TextBlock DockPanel.Dock="Top" Text="БЫСТРЫЙ ВЫБОР" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,0,0,10" />
-        <ListBox x:Name="StationsList" DockPanel.Dock="Top" Background="Transparent" BorderThickness="0" Foreground="White"
-                 SelectionChanged="StationsList_SelectionChanged" MaxHeight="150">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <StackPanel Margin="8,8">
-                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                  <TextBlock Text="{Binding Description}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,3,0,0" />
-                </StackPanel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
-        <TextBlock DockPanel.Dock="Top" Text="УСПЕШНО ЗАПУЩЕННЫЕ СТАНЦИИ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,20,0,10" />
-        <ListBox x:Name="HistoryList" Background="Transparent" BorderThickness="0" Foreground="White"
-                 SelectionChanged="HistoryList_SelectionChanged" ScrollViewer.VerticalScrollBarVisibility="Auto"
-                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <StackPanel Margin="8,6">
-                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                  <TextBlock Text="{Binding Description}" Foreground="{StaticResource Muted}" FontSize="12" TextTrimming="CharacterEllipsis" />
-                </StackPanel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,14">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="8" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <Button x:Name="HistoryPanelButton" Content="История" Padding="10,8" Background="{StaticResource Accent}" Foreground="#102018" Click="ShowHistoryPanel_Click" />
+          <Button x:Name="PlaylistPanelButton" Grid.Column="2" Content="Плейлист" Padding="10,8" Click="ShowPlaylistPanel_Click" />
+        </Grid>
+
+        <Grid x:Name="HistoryPanel">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="УСПЕШНО ЗАПУЩЕННЫЕ СТАНЦИИ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,0,0,8" />
+            <ListBox x:Name="HistoryList" Background="Transparent" BorderThickness="0" Foreground="White"
+                     SelectionChanged="HistoryList_SelectionChanged" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel Margin="6,4">
+                    <StackPanel.ContextMenu>
+                      <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                        <MenuItem Header="Добавить в плейлист" Click="AddHistoryItemToPlaylist_Click" />
+                      </ContextMenu>
+                    </StackPanel.ContextMenu>
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Description}" Foreground="{StaticResource Muted}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding PlayedAt, StringFormat={}{0:dd.MM.yyyy HH:mm:ss}}" Foreground="{StaticResource Muted}" FontSize="10" Margin="0,2,0,0" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Grid>
+
+        <Grid x:Name="PlaylistPanel" Visibility="Collapsed">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="БЫСТРЫЙ ВЫБОР" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,0,0,8" />
+            <ListBox x:Name="StationsList" Background="Transparent" BorderThickness="0" Foreground="White"
+                     SelectionChanged="StationsList_SelectionChanged" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel Margin="6,4">
+                    <StackPanel.ContextMenu>
+                      <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                        <MenuItem Header="Удалить из плейлиста" Click="RemovePlaylistItem_Click" />
+                      </ContextMenu>
+                    </StackPanel.ContextMenu>
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Description}" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Grid>
       </DockPanel>
     </Border>
 
@@ -106,19 +136,57 @@
 
       <Border Grid.Row="2" Background="{StaticResource Panel}" CornerRadius="16" Padding="18">
         <Grid>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-          <TextBox x:Name="StreamUrlBox" VerticalContentAlignment="Center" ToolTip="URL потока: MP3, AAC или совместимый HTTP(S)-поток">
-            <TextBox.ContextMenu>
-              <ContextMenu>
-                <MenuItem Header="Вставить новый URL (заменить)" Click="PasteReplacementUrl_Click" />
-                <MenuItem Header="Очистить поле" Click="ClearStreamUrl_Click" />
-                <Separator />
-                <MenuItem Header="Выделить всё" Click="SelectAllStreamUrl_Click" />
-              </ContextMenu>
-            </TextBox.ContextMenu>
-          </TextBox>
-          <Button Grid.Column="2" x:Name="PlayButton" Content="▶  Слушать" Background="{StaticResource Accent}" Foreground="#102018" Click="PlayButton_Click" />
-          <Button Grid.Column="4" Content="■" ToolTip="Остановить" Click="StopButton_Click" />
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="14" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="42" />
+              <ColumnDefinition Width="210" />
+              <ColumnDefinition Width="10" />
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="10" />
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="10" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="VolumeIconText" Text="🔊" FontSize="18" VerticalAlignment="Center" />
+            <TextBlock x:Name="VolumeValueText" Grid.Column="1" Text="30" Foreground="{StaticResource Muted}" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Center" />
+            <Slider x:Name="VolumeSlider" Grid.Column="2" Minimum="0" Maximum="100" Value="30"
+                    TickFrequency="5" IsSnapToTickEnabled="False" VerticalAlignment="Center"
+                    ValueChanged="VolumeSlider_ValueChanged" ToolTip="Громкость WebStream" />
+            <Button Grid.Column="4" x:Name="MuteButton" Content="Выкл." Padding="12,8" Click="MuteButton_Click" ToolTip="Включить или выключить звук WebStream" />
+            <TextBlock Grid.Column="6" Text="СИСТЕМА" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,10,0" />
+            <Button Grid.Column="7" Content="Параметры звука" Padding="12,8" Click="OpenSoundSettings_Click" ToolTip="Открыть параметры звука Windows" />
+            <Button Grid.Column="9" Content="DSP / устройства" Padding="12,8" Click="OpenSoundDevices_Click" ToolTip="Открыть классическую панель устройств и эффектов Windows" />
+          </Grid>
+          <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <TextBox x:Name="StreamUrlBox" VerticalContentAlignment="Center" ToolTip="URL потока: MP3, AAC или совместимый HTTP(S)-поток">
+              <TextBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Вставить новый URL (заменить)" Click="PasteReplacementUrl_Click" />
+                  <MenuItem Header="Очистить поле" Click="ClearStreamUrl_Click" />
+                  <Separator />
+                  <MenuItem Header="Выделить всё" Click="SelectAllStreamUrl_Click" />
+                </ContextMenu>
+              </TextBox.ContextMenu>
+            </TextBox>
+            <Button Grid.Column="2" x:Name="PlayButton" Content="▶  Слушать" Background="{StaticResource Accent}" Foreground="#102018" Click="PlayButton_Click" />
+            <Button Grid.Column="4" Content="■" ToolTip="Остановить" Click="StopButton_Click" />
+            <Button Grid.Column="6" x:Name="RecordButton" ToolTip="Сохранить текущую песню из MP3-буфера" Click="RecordButton_Click">
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Ellipse x:Name="RecordStatusDot" Width="7" Height="7" Fill="White" VerticalAlignment="Center" />
+                <TextBlock Text="Запись" Margin="6,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="RecordStatusText" Text="0/3" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" />
+              </StackPanel>
+            </Button>
+          </Grid>
         </Grid>
       </Border>
       <MediaElement x:Name="Player" LoadedBehavior="Manual" UnloadedBehavior="Stop" MediaOpened="Player_MediaOpened" MediaFailed="Player_MediaFailed" Visibility="Collapsed" />
