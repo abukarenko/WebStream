@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace WebStream;
 
-public sealed record SongRecordingRequest(Uri StreamUri, string SeedPath, string OutputPath, string InitialTitle, string? ArtworkUrl);
+public sealed record SongRecordingRequest(Uri StreamUri, string SeedPath, string OutputPath, string InitialTitle, string? ArtworkUrl, bool DirectUrlRecording);
 
 public sealed class SongRecordingState(string targetTitle, bool hasSeenTargetTitle)
 {
@@ -32,18 +32,25 @@ public static class SongRecorderWorker
         var outputPath = GetArg(args, "--output");
         var title = GetArg(args, "--title") ?? string.Empty;
         var artworkUrl = GetArg(args, "--artwork");
+        var directUrlRecording = args.Contains("--record-url-direct", StringComparer.OrdinalIgnoreCase);
         if (!Uri.TryCreate(url, UriKind.Absolute, out var streamUri)
-            || string.IsNullOrWhiteSpace(seedPath)
+            || (!directUrlRecording && string.IsNullOrWhiteSpace(seedPath))
             || string.IsNullOrWhiteSpace(outputPath))
             return false;
 
-        request = new SongRecordingRequest(streamUri, seedPath, outputPath, title, artworkUrl);
+        request = new SongRecordingRequest(streamUri, seedPath ?? string.Empty, outputPath, title, artworkUrl, directUrlRecording);
         return true;
     }
 
     public static async Task RunAsync(SongRecordingRequest request)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(request.OutputPath)!);
+        if (request.DirectUrlRecording)
+        {
+            await RecordDirectUrlWithFfmpegAsync(request);
+            return;
+        }
+
         var seedBytes = File.Exists(request.SeedPath)
             ? await File.ReadAllBytesAsync(request.SeedPath)
             : [];
@@ -115,6 +122,25 @@ public static class SongRecorderWorker
         }
     }
 
+    private static async Task RecordDirectUrlWithFfmpegAsync(SongRecordingRequest request)
+    {
+        var ffmpegPath = FindFfmpegPath();
+        if (ffmpegPath is null)
+        {
+            await WindowsNotifier.ShowAsync("Нужен ffmpeg.exe", "Поток без метаданных записывается через ffmpeg");
+            return;
+        }
+
+        var audioUri = await StreamPlaylistResolver.ResolveAsync(request.StreamUri);
+        using var ffmpeg = StartFfmpegFromUrl(ffmpegPath, audioUri, request.OutputPath, request.InitialTitle, TimeSpan.FromMinutes(5));
+        var stderr = await ffmpeg.StandardError.ReadToEndAsync();
+        await ffmpeg.WaitForExitAsync();
+        if (ffmpeg.ExitCode != 0)
+            throw new IOException($"ffmpeg завершился с кодом {ffmpeg.ExitCode}: {stderr}");
+
+        await WindowsNotifier.ShowAsync("Запись сохранена", BuildSavedNotificationText(request));
+    }
+
     private static async Task<string?> DownloadArtworkForFfmpegAsync(SongRecordingRequest request)
     {
         if (!Uri.TryCreate(request.ArtworkUrl, UriKind.Absolute, out var artworkUri)) return null;
@@ -181,6 +207,39 @@ public static class SongRecorderWorker
         {
             startInfo.ArgumentList.Add("-metadata");
             startInfo.ArgumentList.Add($"artist={artist}");
+        }
+        startInfo.ArgumentList.Add("-codec:a");
+        startInfo.ArgumentList.Add("libmp3lame");
+        startInfo.ArgumentList.Add("-b:a");
+        startInfo.ArgumentList.Add("192k");
+        startInfo.ArgumentList.Add("-id3v2_version");
+        startInfo.ArgumentList.Add("3");
+        startInfo.ArgumentList.Add(outputPath);
+        return Process.Start(startInfo) ?? throw new IOException("Не удалось запустить ffmpeg.exe");
+    }
+
+    private static Process StartFfmpegFromUrl(string ffmpegPath, Uri streamUri, string outputPath, string title, TimeSpan duration)
+    {
+        var startInfo = new ProcessStartInfo(ffmpegPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add("-hide_banner");
+        startInfo.ArgumentList.Add("-loglevel");
+        startInfo.ArgumentList.Add("error");
+        startInfo.ArgumentList.Add("-y");
+        startInfo.ArgumentList.Add("-t");
+        startInfo.ArgumentList.Add(((int)duration.TotalSeconds).ToString());
+        startInfo.ArgumentList.Add("-i");
+        startInfo.ArgumentList.Add(streamUri.ToString());
+        startInfo.ArgumentList.Add("-vn");
+        var (_, songTitle) = SplitTitleForMetadata(title);
+        if (!string.IsNullOrWhiteSpace(songTitle))
+        {
+            startInfo.ArgumentList.Add("-metadata");
+            startInfo.ArgumentList.Add($"title={songTitle}");
         }
         startInfo.ArgumentList.Add("-codec:a");
         startInfo.ArgumentList.Add("libmp3lame");

@@ -7,32 +7,52 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using NotifyIcon = System.Windows.Forms.NotifyIcon;
+using ToolStripMenuItem = System.Windows.Forms.ToolStripMenuItem;
+using Rectangle = System.Windows.Shapes.Rectangle;
 
 namespace WebStream;
 
 public partial class MainWindow : Window
 {
     private const int MaxConcurrentSongRecordings = 3;
+    private const int SignalBarCount = 48;
+    private const double SignalReferenceFloor = 0.01;
     private const long AudioBufferBytes = 32L * 1024 * 1024;
     private static readonly HttpClient MetadataClient = new();
     private readonly AudioBackBuffer _audioBuffer = new(AudioBufferBytes);
     private readonly ObservableCollection<RadioStation> _stations = new();
     private readonly ObservableCollection<RadioStation> _history = new();
+    private readonly List<RadioStation> _urlHistory = new();
     private readonly List<ActiveSongRecording> _songRecordings = new();
+    private readonly List<Rectangle> _signalBars = new();
+    private readonly double[] _signalLevels = new double[SignalBarCount];
     private readonly DispatcherTimer _recordingIndicatorTimer = new();
+    private readonly NotifyIcon _trayIcon = new();
     private readonly string _historyPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "history.json");
     private readonly string _playlistPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "playlist.json");
     private readonly string _statePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "state.json");
+    private readonly string _recordingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "active-recordings.json");
+    private readonly string _urlHistoryPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "url-history.json");
     private bool _isPlaying;
     private CancellationTokenSource? _metadataCancellation;
+    private CancellationTokenSource? _signalCancellation;
+    private Process? _signalProcess;
+    private double _signalReferenceLevel = SignalReferenceFloor;
+    private int _historyNavigationIndex = -1;
+    private bool _isNavigatingUrlHistory;
     private Uri? _currentStreamUri;
     private long _currentTrackStartPosition;
+    private DateTime _currentTrackStartedAt = DateTime.Now;
     private string? _currentTrackTitle;
     private string? _currentTrackKey;
     private string? _currentArtworkUrl;
@@ -43,15 +63,25 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        LoadWindowIcon();
+        InitializeTrayIcon();
+        StateChanged += MainWindow_StateChanged;
         StationsList.ItemsSource = _stations;
         HistoryList.ItemsSource = _history;
         SetPlayerVolume(VolumeSlider.Value / 100);
+        InitializeSignalBars();
         UpdateRecordingIndicator();
-        _recordingIndicatorTimer.Interval = TimeSpan.FromSeconds(2);
-        _recordingIndicatorTimer.Tick += (_, _) => CleanupFinishedRecorders();
+        _recordingIndicatorTimer.Interval = TimeSpan.FromSeconds(1);
+        _recordingIndicatorTimer.Tick += (_, _) =>
+        {
+            CleanupFinishedRecorders();
+            UpdateRecordingTimers();
+        };
         _recordingIndicatorTimer.Start();
         LoadPlaylist();
         LoadHistory();
+        LoadUrlHistory();
+        LoadActiveRecordings();
         LoadAppState();
     }
 
@@ -136,6 +166,7 @@ public partial class MainWindow : Window
             _isPlaying = false;
             PlayButton.Content = "▶  Слушать";
             StatusText.Text = "ПАУЗА";
+            StopSignalAnalyzer();
             SaveAppState();
             return;
         }
@@ -158,15 +189,18 @@ public partial class MainWindow : Window
         MetadataLogText.Clear();
         AppendMetadata($"Подключение\n{value}");
         UpdateMetadata(StationNameText.Text, MetaDescriptionText.Text == "—" ? "Пользовательский поток" : MetaDescriptionText.Text, value, "Подключение к станции…");
+        RegisterUrlHistory(StationNameText.Text, MetaDescriptionText.Text, value);
         _audioBuffer.Reset();
         _currentStreamUri = uri;
         _currentTrackStartPosition = 0;
+        _currentTrackStartedAt = DateTime.Now;
         _currentTrackTitle = null;
         _currentTrackKey = null;
         Player.Stop();
         ResetArtwork();
         Player.Source = uri;
         Player.Play();
+        StartSignalAnalyzer(uri);
         StartMetadataReader(uri);
         _isPlaying = true;
         PlayButton.Content = "Ⅱ  Пауза";
@@ -177,6 +211,7 @@ public partial class MainWindow : Window
     {
         Player.Stop();
         StopMetadataReader();
+        StopSignalAnalyzer();
         _isPlaying = false;
         PlayButton.Content = "▶  Слушать";
         StatusText.Text = "ОСТАНОВЛЕНО";
@@ -188,7 +223,8 @@ public partial class MainWindow : Window
     private void Player_MediaOpened(object sender, RoutedEventArgs e)
     {
         StatusText.Text = "В ЭФИРЕ";
-        TrackText.Text = "Поток воспроизводится.";
+        if (string.IsNullOrWhiteSpace(_currentTrackTitle))
+            TrackText.Text = "Поток воспроизводится.";
         MetaStatusText.Text = "В эфире";
         SaveCurrentStationToHistory();
     }
@@ -201,7 +237,86 @@ public partial class MainWindow : Window
         TrackText.Text = "Не удалось открыть поток. Проверьте адрес или формат станции.";
         MetaStatusText.Text = "Не удалось открыть поток";
         StopMetadataReader();
+        StopSignalAnalyzer();
         SaveAppState();
+    }
+
+    private void MainWindow_StateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState != WindowState.Minimized) return;
+        HideToTray();
+    }
+
+    private void HideToTray()
+    {
+        ShowInTaskbar = false;
+        Hide();
+        _trayIcon.Visible = true;
+    }
+
+    private void RestoreFromTray()
+    {
+        Show();
+        ShowInTaskbar = true;
+        WindowState = WindowState.Normal;
+        Activate();
+        _trayIcon.Visible = false;
+    }
+
+    private void InitializeTrayIcon()
+    {
+        var iconPath = FindAssetPath("webstream.ico");
+        if (!string.IsNullOrWhiteSpace(iconPath))
+            _trayIcon.Icon = new System.Drawing.Icon(iconPath);
+
+        _trayIcon.Text = "WebStream Radio";
+        _trayIcon.Visible = false;
+        _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(RestoreFromTray);
+
+        var showItem = new ToolStripMenuItem("Показать");
+        showItem.Click += (_, _) => Dispatcher.Invoke(RestoreFromTray);
+        var exitItem = new ToolStripMenuItem("Выход");
+        exitItem.Click += (_, _) => Dispatcher.Invoke(Close);
+
+        _trayIcon.ContextMenuStrip = new System.Windows.Forms.ContextMenuStrip();
+        _trayIcon.ContextMenuStrip.Items.Add(showItem);
+        _trayIcon.ContextMenuStrip.Items.Add(exitItem);
+    }
+
+    private void LoadWindowIcon()
+    {
+        var iconPath = FindAssetPath("webstream.ico");
+        if (string.IsNullOrWhiteSpace(iconPath)) return;
+
+        using var icon = new System.Drawing.Icon(iconPath);
+        Icon = Imaging.CreateBitmapSourceFromHIcon(
+            icon.Handle,
+            Int32Rect.Empty,
+            BitmapSizeOptions.FromEmptyOptions());
+    }
+
+    private static string? FindAssetPath(string fileName)
+    {
+        var localCandidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "Assets", fileName),
+            Path.Combine(AppContext.BaseDirectory, fileName),
+            Path.Combine(Environment.CurrentDirectory, "Assets", fileName)
+        };
+
+        foreach (var candidate in localCandidates)
+            if (File.Exists(candidate))
+                return candidate;
+
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, "Assets", fileName);
+            if (File.Exists(candidate)) return candidate;
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 
     private void AddStation_Click(object sender, RoutedEventArgs e)
@@ -261,6 +376,41 @@ public partial class MainWindow : Window
         OpenWindowsPanel("mmsys.cpl");
     }
 
+    private void HistoryPreviousButton_Click(object sender, RoutedEventArgs e)
+    {
+        NavigateHistory(-1);
+    }
+
+    private void HistoryNextButton_Click(object sender, RoutedEventArgs e)
+    {
+        NavigateHistory(1);
+    }
+
+    private void NavigateHistory(int direction)
+    {
+        if (_urlHistory.Count == 0) return;
+
+        var currentUrl = StreamUrlBox.Text.Trim();
+        if (_historyNavigationIndex < 0 || _historyNavigationIndex >= _urlHistory.Count)
+            _historyNavigationIndex = _urlHistory.FindLastIndex(item => string.Equals(item.StreamUrl, currentUrl, StringComparison.OrdinalIgnoreCase));
+        if (_historyNavigationIndex < 0) _historyNavigationIndex = _urlHistory.Count - 1;
+
+        var nextIndex = Math.Clamp(_historyNavigationIndex + direction, 0, _urlHistory.Count - 1);
+        if (nextIndex == _historyNavigationIndex && string.Equals(_urlHistory[nextIndex].StreamUrl, currentUrl, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _historyNavigationIndex = nextIndex;
+        _isNavigatingUrlHistory = true;
+        try
+        {
+            SelectStation(_urlHistory[_historyNavigationIndex]);
+        }
+        finally
+        {
+            _isNavigatingUrlHistory = false;
+        }
+    }
+
     private void RecordButton_Click(object sender, RoutedEventArgs e)
     {
         CaptureCurrentSong();
@@ -283,9 +433,11 @@ public partial class MainWindow : Window
         }
 
         CleanupFinishedRecorders();
-        var recordingKey = BuildRecordingKey();
+        var seedBytes = _audioBuffer.SnapshotFrom(_currentTrackStartPosition);
+        var directUrlRecording = seedBytes.Length == 0;
+        var recordingKey = directUrlRecording ? BuildUrlRecordingKey(_currentStreamUri) : BuildRecordingKey();
         if (!string.IsNullOrWhiteSpace(recordingKey)
-            && _songRecordings.Any(recording => string.Equals(recording.TrackKey, recordingKey, StringComparison.OrdinalIgnoreCase)))
+            && _songRecordings.Any(recording => !recording.IsCompleted && string.Equals(recording.TrackKey, recordingKey, StringComparison.OrdinalIgnoreCase)))
         {
             StatusText.Text = "УЖЕ ПИШЕТСЯ";
             MetaStatusText.Text = "Трек уже сохраняется";
@@ -293,20 +445,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_songRecordings.Count >= MaxConcurrentSongRecordings)
+        if (_songRecordings.Count(recording => !recording.IsCompleted) >= MaxConcurrentSongRecordings)
         {
             StatusText.Text = "ЛИМИТ";
             MetaStatusText.Text = "Уже запущены 3 фоновые записи";
             return;
         }
 
-        var seedBytes = _audioBuffer.SnapshotFrom(_currentTrackStartPosition);
-        if (seedBytes.Length == 0)
-        {
-            StatusText.Text = "БУФЕР ПУСТ";
-            MetaStatusText.Text = "Поток еще не накопил MP3-данные для записи";
-            return;
-        }
+        MakeRoomForRecordingSlot();
 
         var recordingsFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
@@ -316,10 +462,12 @@ public partial class MainWindow : Window
         var tempFolder = Path.Combine(Path.GetTempPath(), "WebStream");
         Directory.CreateDirectory(tempFolder);
         var seedPath = Path.Combine(tempFolder, $"{Guid.NewGuid():N}.mp3seed");
-        File.WriteAllBytes(seedPath, seedBytes);
+        if (!directUrlRecording)
+            File.WriteAllBytes(seedPath, seedBytes);
 
-        var outputPath = Path.Combine(recordingsFolder, BuildRecordingFileName());
-        var process = StartSongRecorder(_currentStreamUri, seedPath, outputPath, _currentTrackTitle ?? string.Empty, _currentArtworkUrl);
+        var outputPath = Path.Combine(recordingsFolder, directUrlRecording ? BuildUrlRecordingFileName(_currentStreamUri) : BuildRecordingFileName());
+        var title = directUrlRecording ? BuildUrlRecordingTitle(_currentStreamUri) : _currentTrackTitle ?? string.Empty;
+        var process = StartSongRecorder(_currentStreamUri, seedPath, outputPath, title, directUrlRecording ? null : _currentArtworkUrl, directUrlRecording);
         if (process is null)
         {
             TryDeleteFile(seedPath);
@@ -328,16 +476,29 @@ public partial class MainWindow : Window
             return;
         }
 
-        var recordingTitle = BuildRecordingNotificationText();
-        _songRecordings.Add(new ActiveSongRecording(recordingKey, process, recordingTitle, MetaStationText.Text, outputPath, DateTime.Now));
+        var recordingTitle = directUrlRecording ? title : BuildRecordingNotificationText();
+        var timerOffset = directUrlRecording ? TimeSpan.Zero : DateTime.Now - _currentTrackStartedAt;
+        if (timerOffset < TimeSpan.Zero) timerOffset = TimeSpan.Zero;
+        var now = DateTime.Now;
+        _songRecordings.Add(new ActiveSongRecording(
+            recordingKey,
+            process,
+            recordingTitle,
+            MetaStationText.Text,
+            MetaDescriptionText.Text,
+            _currentStreamUri.ToString(),
+            outputPath,
+            now,
+            now - timerOffset));
         UpdateRecordingIndicator();
+        SaveActiveRecordings();
         StatusText.Text = "ЗАПИСЬ";
         MetaStatusText.Text = $"Сохраняю песню: {Path.GetFileName(outputPath)}";
-        AppendMetadata($"СТАРТ ЗАПИСИ\n{recordingTitle}\n{Path.GetFileName(outputPath)}");
+        AppendMetadata($"СТАРТ ЗАПИСИ\n{recordingTitle}\n{Path.GetFileName(outputPath)}{(directUrlRecording ? "\nРежим: URL без метаданных, 5 минут" : string.Empty)}");
         _ = WindowsNotifier.ShowAsync("Запись песни", recordingTitle);
     }
 
-    private Process? StartSongRecorder(Uri streamUri, string seedPath, string outputPath, string title, string? artworkUrl)
+    private Process? StartSongRecorder(Uri streamUri, string seedPath, string outputPath, string title, string? artworkUrl, bool directUrlRecording)
     {
         var appExePath = Path.Combine(AppContext.BaseDirectory, "WebStream.exe");
         var runsFromAppHost = File.Exists(appExePath);
@@ -361,6 +522,8 @@ public partial class MainWindow : Window
         startInfo.ArgumentList.Add(outputPath);
         startInfo.ArgumentList.Add("--title");
         startInfo.ArgumentList.Add(title);
+        if (directUrlRecording)
+            startInfo.ArgumentList.Add("--record-url-direct");
         if (!string.IsNullOrWhiteSpace(artworkUrl))
         {
             startInfo.ArgumentList.Add("--artwork");
@@ -372,15 +535,19 @@ public partial class MainWindow : Window
 
     private void CleanupFinishedRecorders()
     {
-        var completed = _songRecordings.Where(IsRecordingFinished).ToList();
+        var completed = _songRecordings.Where(recording => !recording.IsCompleted && IsRecordingFinished(recording)).ToList();
         foreach (var recording in completed)
         {
-            var duration = DateTime.Now - recording.StartedAt;
+            MarkRecordingCompleted(recording);
+            var duration = recording.ProcessDuration ?? DateTime.Now - recording.StartedAt;
             AppendMetadata($"СТОП ЗАПИСИ\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}\nДлительность процесса: {duration:mm\\:ss}");
         }
 
-        var removed = _songRecordings.RemoveAll(recording => completed.Contains(recording));
-        if (removed > 0) UpdateRecordingIndicator();
+        if (completed.Count > 0)
+        {
+            UpdateRecordingIndicator();
+            SaveActiveRecordings();
+        }
     }
 
     private static bool IsRecordingFinished(ActiveSongRecording recording)
@@ -397,7 +564,7 @@ public partial class MainWindow : Window
 
     private void UpdateRecordingIndicator()
     {
-        var count = Math.Clamp(_songRecordings.Count, 0, MaxConcurrentSongRecordings);
+        var count = Math.Clamp(_songRecordings.Count(recording => !recording.IsCompleted), 0, MaxConcurrentSongRecordings);
         RecordStatusText.Text = $"{count}/{MaxConcurrentSongRecordings}";
         RecordStatusDot.Fill = count switch
         {
@@ -407,6 +574,141 @@ public partial class MainWindow : Window
             _ => System.Windows.Media.Brushes.Red
         };
         RecordButton.ToolTip = BuildRecordingToolTip();
+        UpdateRecordingTimers();
+    }
+
+    private void UpdateRecordingTimers()
+    {
+        var timerTexts = new[] { RecordingTimer1Text, RecordingTimer2Text, RecordingTimer3Text };
+        var timerSlots = new[] { RecordingTimer1Slot, RecordingTimer2Slot, RecordingTimer3Slot };
+        for (var i = 0; i < timerTexts.Length; i++)
+        {
+            if (i >= _songRecordings.Count)
+            {
+                timerTexts[i].Text = string.Empty;
+                timerTexts[i].Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(221, 236, 207));
+                timerSlots[i].ToolTip = string.Empty;
+                continue;
+            }
+
+            var recording = _songRecordings[i];
+            var duration = recording.CompletedDisplayDuration ?? DateTime.Now - recording.TimerStartedAt;
+            timerTexts[i].Text = FormatRecordingDuration(duration);
+            timerTexts[i].Foreground = recording.IsCompleted
+                ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(82, 88, 96))
+                : new SolidColorBrush(System.Windows.Media.Color.FromRgb(221, 236, 207));
+            timerSlots[i].ToolTip = Path.GetFileName(recording.OutputPath);
+        }
+    }
+
+    private void StopRecordingTimerMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetRecordingFromTimerMenu(sender, out var recording)) return;
+        StopRecording(recording, deleteFile: false);
+    }
+
+    private void DeleteRecordingTimerMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetRecordingFromTimerMenu(sender, out var recording)) return;
+        StopRecording(recording, deleteFile: true);
+    }
+
+    private void RecordingTimerSlot_LeftClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (!TryGetRecordingFromTimerSlot(sender, out var recording)) return;
+        StationNameText.Text = recording.Station;
+        TrackText.Text = recording.Title;
+        StreamUrlBox.Text = recording.StreamUrl;
+        UpdateMetadata(recording.Station, recording.Description, recording.StreamUrl, "Переключение на канал записи…");
+        StartPlayback();
+    }
+
+    private bool TryGetRecordingFromTimerMenu(object sender, out ActiveSongRecording recording)
+    {
+        recording = default!;
+        if (sender is not System.Windows.Controls.MenuItem menuItem
+            || menuItem.Parent is not System.Windows.Controls.ContextMenu contextMenu
+            || contextMenu.PlacementTarget is not FrameworkElement { Tag: string tagText }
+            || !int.TryParse(tagText, out var index)
+            || index < 0
+            || index >= _songRecordings.Count)
+            return false;
+
+        recording = _songRecordings[index];
+        return true;
+    }
+
+    private bool TryGetRecordingFromTimerSlot(object sender, out ActiveSongRecording recording)
+    {
+        recording = default!;
+        if (sender is not FrameworkElement { Tag: string tagText }
+            || !int.TryParse(tagText, out var index)
+            || index < 0
+            || index >= _songRecordings.Count)
+            return false;
+
+        recording = _songRecordings[index];
+        return true;
+    }
+
+    private void StopRecording(ActiveSongRecording recording, bool deleteFile)
+    {
+        TryKillRecordingProcess(recording);
+        MarkRecordingCompleted(recording);
+
+        if (deleteFile)
+        {
+            TryDeleteFile(recording.OutputPath);
+            _songRecordings.Remove(recording);
+            AppendMetadata($"ЗАПИСЬ УДАЛЕНА\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}");
+        }
+        else
+        {
+            AppendMetadata($"ЗАПИСЬ ОСТАНОВЛЕНА\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}");
+        }
+
+        UpdateRecordingIndicator();
+        SaveActiveRecordings();
+    }
+
+    private static void TryKillRecordingProcess(ActiveSongRecording recording)
+    {
+        try
+        {
+            if (!recording.Process.HasExited)
+                recording.Process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+    }
+
+    private static void MarkRecordingCompleted(ActiveSongRecording recording)
+    {
+        if (recording.IsCompleted) return;
+        var now = DateTime.Now;
+        recording.IsCompleted = true;
+        recording.CompletedAt = now;
+        recording.ProcessDuration = now - recording.StartedAt;
+        recording.CompletedDisplayDuration = now - recording.TimerStartedAt;
+    }
+
+    private void MakeRoomForRecordingSlot()
+    {
+        if (_songRecordings.Count < MaxConcurrentSongRecordings) return;
+        var completed = _songRecordings.FirstOrDefault(recording => recording.IsCompleted);
+        if (completed is not null)
+            _songRecordings.Remove(completed);
+        SaveActiveRecordings();
+    }
+
+    private static string FormatRecordingDuration(TimeSpan duration)
+    {
+        if (duration < TimeSpan.Zero) duration = TimeSpan.Zero;
+        return $"{(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}";
     }
 
     private string BuildRecordingToolTip()
@@ -427,6 +729,11 @@ public partial class MainWindow : Window
         return BuildSongCompareKey(title);
     }
 
+    private static string BuildUrlRecordingKey(Uri streamUri)
+    {
+        return $"URL:{streamUri.Host}:{streamUri.AbsolutePath}";
+    }
+
     private string BuildRecordingFileName()
     {
         var title = !string.IsNullOrWhiteSpace(_currentTrackTitle)
@@ -439,6 +746,19 @@ public partial class MainWindow : Window
         if (safeName.Length > 120) safeName = safeName[..120].Trim();
         if (string.IsNullOrWhiteSpace(safeName)) safeName = "WebStream";
         return $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.mp3";
+    }
+
+    private static string BuildUrlRecordingFileName(Uri streamUri)
+    {
+        var host = string.IsNullOrWhiteSpace(streamUri.Host) ? "stream" : streamUri.Host;
+        var safeHost = string.Join("_", host.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
+        if (string.IsNullOrWhiteSpace(safeHost)) safeHost = "stream";
+        return $"{safeHost}_{DateTime.Now:yyyyMMdd_HHmmss}.mp3";
+    }
+
+    private static string BuildUrlRecordingTitle(Uri streamUri)
+    {
+        return string.IsNullOrWhiteSpace(streamUri.Host) ? "Поток без метаданных" : streamUri.Host;
     }
 
     private string BuildRecordingNotificationText()
@@ -479,8 +799,229 @@ public partial class MainWindow : Window
     {
         _recordingIndicatorTimer.Stop();
         SaveAppState();
+        SaveActiveRecordings();
         StopMetadataReader();
+        StopSignalAnalyzer();
+        _trayIcon.Visible = false;
+        _trayIcon.Icon?.Dispose();
+        _trayIcon.ContextMenuStrip?.Dispose();
+        _trayIcon.Dispose();
         base.OnClosed(e);
+    }
+
+    private void InitializeSignalBars()
+    {
+        SignalBarsHost.Children.Clear();
+        _signalBars.Clear();
+
+        for (var i = 0; i < SignalBarCount; i++)
+        {
+            var bar = new Rectangle
+            {
+                Height = 2,
+                MinHeight = 2,
+                Width = 4,
+                Margin = new Thickness(1, 0, 1, 0),
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(68, 83, 98))
+            };
+            _signalBars.Add(bar);
+            SignalBarsHost.Children.Add(bar);
+        }
+    }
+
+    private void StartSignalAnalyzer(Uri streamUri)
+    {
+        StopSignalAnalyzer();
+        ResetSignalBars();
+
+        var ffmpegPath = FindFfmpegPath();
+        if (ffmpegPath is null)
+        {
+            AppendMetadata("Уровень сигнала\nffmpeg.exe не найден");
+            return;
+        }
+
+        _signalCancellation = new CancellationTokenSource();
+        _ = RunSignalAnalyzerAsync(ffmpegPath, streamUri, _signalCancellation.Token);
+    }
+
+    private void StopSignalAnalyzer()
+    {
+        _signalCancellation?.Cancel();
+        _signalCancellation?.Dispose();
+        _signalCancellation = null;
+
+        try
+        {
+            if (_signalProcess is { HasExited: false })
+                _signalProcess.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+
+        _signalProcess = null;
+        ResetSignalBars();
+    }
+
+    private async Task RunSignalAnalyzerAsync(string ffmpegPath, Uri streamUri, CancellationToken cancellationToken)
+    {
+        Process? process = null;
+        try
+        {
+            var audioUri = await StreamPlaylistResolver.ResolveAsync(streamUri, cancellationToken);
+            var startInfo = new ProcessStartInfo(ffmpegPath)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("-hide_banner");
+            startInfo.ArgumentList.Add("-loglevel");
+            startInfo.ArgumentList.Add("error");
+            startInfo.ArgumentList.Add("-i");
+            startInfo.ArgumentList.Add(audioUri.ToString());
+            startInfo.ArgumentList.Add("-vn");
+            startInfo.ArgumentList.Add("-f");
+            startInfo.ArgumentList.Add("s16le");
+            startInfo.ArgumentList.Add("-ac");
+            startInfo.ArgumentList.Add("1");
+            startInfo.ArgumentList.Add("-ar");
+            startInfo.ArgumentList.Add("8000");
+            startInfo.ArgumentList.Add("pipe:1");
+
+            process = Process.Start(startInfo);
+            if (process is null) return;
+            _signalProcess = process;
+            _ = process.StandardError.ReadToEndAsync(cancellationToken);
+
+            var buffer = new byte[4096];
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var bytesRead = await process.StandardOutput.BaseStream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+                if (bytesRead <= 0) break;
+                var level = CalculatePcmRms(buffer, bytesRead);
+                await Dispatcher.InvokeAsync(() => PushSignalLevel(level), DispatcherPriority.Background, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        finally
+        {
+            try
+            {
+                if (process is { HasExited: false })
+                    process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+            }
+            finally
+            {
+                process?.Dispose();
+            }
+
+            if (ReferenceEquals(_signalProcess, process))
+                _signalProcess = null;
+        }
+    }
+
+    private static double CalculatePcmRms(byte[] buffer, int bytesRead)
+    {
+        var sampleCount = bytesRead / 2;
+        if (sampleCount <= 0) return 0;
+
+        double sumSquares = 0;
+        for (var i = 0; i < sampleCount * 2; i += 2)
+        {
+            var sample = BitConverter.ToInt16(buffer, i) / 32768.0;
+            sumSquares += sample * sample;
+        }
+
+        var rms = Math.Sqrt(sumSquares / sampleCount);
+        return Math.Clamp(rms, 0, 1);
+    }
+
+    private void PushSignalLevel(double rawLevel)
+    {
+        _signalReferenceLevel = rawLevel > _signalReferenceLevel
+            ? (_signalReferenceLevel * 0.75) + (rawLevel * 0.25)
+            : (_signalReferenceLevel * 0.995) + (rawLevel * 0.005);
+        _signalReferenceLevel = Math.Max(_signalReferenceLevel, SignalReferenceFloor);
+
+        var visualLevel = rawLevel < 0.0008
+            ? 0
+            : Math.Clamp(rawLevel / (_signalReferenceLevel * 1.7), 0, 1);
+
+        Array.Copy(_signalLevels, 1, _signalLevels, 0, _signalLevels.Length - 1);
+        _signalLevels[^1] = visualLevel;
+        RenderSignalBars();
+    }
+
+    private void ResetSignalBars()
+    {
+        Array.Clear(_signalLevels);
+        _signalReferenceLevel = SignalReferenceFloor;
+        RenderSignalBars();
+    }
+
+    private void RenderSignalBars()
+    {
+        for (var i = 0; i < _signalBars.Count; i++)
+        {
+            var level = Math.Clamp(_signalLevels[i], 0, 1);
+            var bar = _signalBars[i];
+            bar.Height = 2 + level * 20;
+            bar.Fill = level switch
+            {
+                > 0.8 => System.Windows.Media.Brushes.OrangeRed,
+                > 0.55 => System.Windows.Media.Brushes.Gold,
+                > 0.18 => (System.Windows.Media.Brush)FindResource("Accent"),
+                _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(68, 83, 98))
+            };
+        }
+    }
+
+    private static string? FindFfmpegPath()
+    {
+        var localCandidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe"),
+            Path.Combine(AppContext.BaseDirectory, "ffmpeg", "bin", "ffmpeg.exe"),
+            Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe"),
+            Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg", "bin", "ffmpeg.exe")
+        };
+
+        foreach (var candidate in localCandidates)
+            if (File.Exists(candidate))
+                return candidate;
+
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path)) return null;
+
+        foreach (var directory in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(directory)) continue;
+            var candidate = Path.Combine(directory.Trim(), "ffmpeg.exe");
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return null;
     }
 
     private void StartMetadataReader(Uri streamUri)
@@ -726,7 +1267,11 @@ public partial class MainWindow : Window
             MetaDescriptionText.Text = genre;
             changed = true;
         }
-        if (changed) SaveCurrentStationToHistory();
+        if (changed)
+        {
+            SaveCurrentStationToHistory();
+            UpdateCurrentUrlHistoryMetadata();
+        }
     }
 
     private void SetCurrentTrack(string title)
@@ -739,6 +1284,7 @@ public partial class MainWindow : Window
             _currentTrackTitle = normalizedTitle;
             _currentTrackKey = songKey;
             _currentTrackStartPosition = _audioBuffer.CurrentPosition;
+            _currentTrackStartedAt = DateTime.Now;
         }
 
         TrackText.Text = title;
@@ -746,6 +1292,21 @@ public partial class MainWindow : Window
         if (string.Equals(_lastArtworkQuery, title, StringComparison.Ordinal)) return;
         _lastArtworkQuery = title;
         _ = FindArtworkAsync(title, _metadataCancellation?.Token ?? CancellationToken.None);
+    }
+
+    private void UpdateCurrentUrlHistoryMetadata()
+    {
+        var streamUrl = StreamUrlBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(streamUrl) || _urlHistory.Count == 0) return;
+
+        var index = _historyNavigationIndex >= 0 && _historyNavigationIndex < _urlHistory.Count
+            && string.Equals(_urlHistory[_historyNavigationIndex].StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase)
+            ? _historyNavigationIndex
+            : _urlHistory.FindLastIndex(item => string.Equals(item.StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase));
+
+        if (index < 0) return;
+        _urlHistory[index] = new RadioStation(StationNameText.Text, MetaDescriptionText.Text, streamUrl, DateTime.Now);
+        SaveUrlHistory();
     }
 
     private static string NormalizeTitle(string title)
@@ -860,6 +1421,43 @@ public partial class MainWindow : Window
         }
     }
 
+    private void RegisterUrlHistory(string stationName, string description, string streamUrl)
+    {
+        if (_isNavigatingUrlHistory || string.IsNullOrWhiteSpace(streamUrl)) return;
+
+        if (_historyNavigationIndex >= 0 && _historyNavigationIndex < _urlHistory.Count - 1)
+            _urlHistory.RemoveRange(_historyNavigationIndex + 1, _urlHistory.Count - _historyNavigationIndex - 1);
+
+        if (_urlHistory.Count > 0 && string.Equals(_urlHistory[^1].StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            _urlHistory[^1] = new RadioStation(stationName, description, streamUrl, DateTime.Now);
+            _historyNavigationIndex = _urlHistory.Count - 1;
+            SaveUrlHistory();
+            return;
+        }
+
+        _urlHistory.Add(new RadioStation(stationName, description, streamUrl, DateTime.Now));
+        if (_urlHistory.Count > 100)
+            _urlHistory.RemoveRange(0, _urlHistory.Count - 100);
+        _historyNavigationIndex = _urlHistory.Count - 1;
+        SaveUrlHistory();
+    }
+
+    private void SaveUrlHistory()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_urlHistoryPath)!);
+            File.WriteAllText(_urlHistoryPath, JsonSerializer.Serialize(_urlHistory, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private void LoadAppState()
     {
         try
@@ -896,6 +1494,148 @@ public partial class MainWindow : Window
         }
     }
 
+    private void LoadActiveRecordings()
+    {
+        try
+        {
+            if (!File.Exists(_recordingsPath)) return;
+            var states = JsonSerializer.Deserialize<List<ActiveRecordingState>>(File.ReadAllText(_recordingsPath));
+            if (states is null) return;
+
+            foreach (var state in states.Take(MaxConcurrentSongRecordings))
+            {
+                if (!TryRestoreRecordingProcess(state, out var process)) continue;
+                _songRecordings.Add(new ActiveSongRecording(
+                    state.TrackKey,
+                    process,
+                    state.Title,
+                    state.Station,
+                    state.Description,
+                    state.StreamUrl,
+                    state.OutputPath,
+                    state.StartedAt,
+                    state.TimerStartedAt));
+            }
+
+            if (_songRecordings.Count > 0)
+            {
+                AppendMetadata($"ВОССТАНОВЛЕНЫ ЗАПИСИ\nАктивных процессов: {_songRecordings.Count}");
+                UpdateRecordingIndicator();
+            }
+            SaveActiveRecordings();
+        }
+        catch (JsonException)
+        {
+            SaveActiveRecordings();
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static bool TryRestoreRecordingProcess(ActiveRecordingState state, out Process process)
+    {
+        process = default!;
+        try
+        {
+            var candidate = Process.GetProcessById(state.ProcessId);
+            if (candidate.HasExited)
+            {
+                candidate.Dispose();
+                return false;
+            }
+
+            var startDelta = (candidate.StartTime - state.ProcessStartedAt).Duration();
+            if (startDelta > TimeSpan.FromSeconds(5))
+            {
+                candidate.Dispose();
+                return false;
+            }
+
+            process = candidate;
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private void SaveActiveRecordings()
+    {
+        try
+        {
+            var states = _songRecordings
+                .Where(recording => !recording.IsCompleted && IsRecordingStillRunning(recording))
+                .Select(recording => new ActiveRecordingState(
+                    recording.TrackKey,
+                    recording.Process.Id,
+                    GetProcessStartTime(recording.Process),
+                    recording.Title,
+                    recording.Station,
+                    recording.Description,
+                    recording.StreamUrl,
+                    recording.OutputPath,
+                    recording.StartedAt,
+                    recording.TimerStartedAt))
+                .ToList();
+
+            Directory.CreateDirectory(Path.GetDirectoryName(_recordingsPath)!);
+            File.WriteAllText(_recordingsPath, JsonSerializer.Serialize(states, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+    }
+
+    private static bool IsRecordingStillRunning(ActiveSongRecording recording)
+    {
+        try
+        {
+            return !recording.Process.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static DateTime GetProcessStartTime(Process process)
+    {
+        try
+        {
+            return process.StartTime;
+        }
+        catch (InvalidOperationException)
+        {
+            return DateTime.MinValue;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return DateTime.MinValue;
+        }
+    }
+
     private void LoadHistory()
     {
         try
@@ -913,6 +1653,34 @@ public partial class MainWindow : Window
         catch (IOException)
         {
             // Ignore unavailable local storage.
+        }
+    }
+
+    private void LoadUrlHistory()
+    {
+        try
+        {
+            if (File.Exists(_urlHistoryPath))
+            {
+                var stations = JsonSerializer.Deserialize<List<RadioStation>>(File.ReadAllText(_urlHistoryPath));
+                if (stations is not null)
+                    _urlHistory.AddRange(stations.Where(station => !string.IsNullOrWhiteSpace(station.StreamUrl)).TakeLast(100));
+            }
+            else if (_history.Count > 0)
+            {
+                _urlHistory.AddRange(_history.Reverse().TakeLast(100));
+            }
+
+            _historyNavigationIndex = _urlHistory.Count - 1;
+        }
+        catch (JsonException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
@@ -960,6 +1728,42 @@ public partial class MainWindow : Window
 
 public sealed record RadioStation(string Name, string Description, string StreamUrl, DateTime? PlayedAt = null);
 
-public sealed record ActiveSongRecording(string TrackKey, Process Process, string Title, string Station, string OutputPath, DateTime StartedAt);
+public sealed record ActiveRecordingState(
+    string TrackKey,
+    int ProcessId,
+    DateTime ProcessStartedAt,
+    string Title,
+    string Station,
+    string Description,
+    string StreamUrl,
+    string OutputPath,
+    DateTime StartedAt,
+    DateTime TimerStartedAt);
+
+public sealed class ActiveSongRecording(
+    string trackKey,
+    Process process,
+    string title,
+    string station,
+    string description,
+    string streamUrl,
+    string outputPath,
+    DateTime startedAt,
+    DateTime timerStartedAt)
+{
+    public string TrackKey { get; } = trackKey;
+    public Process Process { get; } = process;
+    public string Title { get; } = title;
+    public string Station { get; } = station;
+    public string Description { get; } = description;
+    public string StreamUrl { get; } = streamUrl;
+    public string OutputPath { get; } = outputPath;
+    public DateTime StartedAt { get; } = startedAt;
+    public DateTime TimerStartedAt { get; } = timerStartedAt;
+    public bool IsCompleted { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public TimeSpan? ProcessDuration { get; set; }
+    public TimeSpan? CompletedDisplayDuration { get; set; }
+}
 
 public sealed record AppState(string? StreamUrl, bool WasPlaying);

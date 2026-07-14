@@ -10,6 +10,7 @@ WebStream is a Windows WPF internet radio player with stream metadata, artwork l
 - Remembers the last stream URL and whether playback was active on exit.
 - Keeps an in-memory back buffer for the current stream so a song can be saved after it has already started.
 - Saves up to three songs in parallel using background WebStream recorder processes.
+- For streams without usable metadata/back buffer, records a 5-minute URL-based MP3 segment named from the stream host and timestamp.
 - Shows Windows notifications when song recording starts and when the saved file is complete.
 - Embeds available cover art and basic ID3 metadata into saved MP3 files.
 

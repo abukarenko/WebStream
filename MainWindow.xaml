@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="WebStream Radio" Height="620" Width="980" MinHeight="500" MinWidth="780"
+        Icon="Assets/webstream.ico"
         Background="{StaticResource Surface}" Foreground="White" WindowStartupLocation="CenterScreen">
   <Grid Margin="24">
     <Grid.ColumnDefinitions>
@@ -81,19 +82,17 @@
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="18" />
-          <ColumnDefinition Width="260" />
-          <ColumnDefinition Width="18" />
-          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="360" />
         </Grid.ColumnDefinitions>
         <StackPanel>
-          <TextBlock Text="СЕЙЧАС ИГРАЕТ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" />
+          <TextBlock Text="СЕЙЧАС В ЭФИРЕ" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="Bold" />
           <TextBlock x:Name="StationNameText" Text="Выберите станцию" FontSize="28" FontWeight="SemiBold" Margin="0,8,0,0" />
         </StackPanel>
         <TextBox Grid.Column="2" x:Name="MetadataLogText" Height="116" IsReadOnly="True" AcceptsReturn="True"
                  TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                  Background="#101216" BorderBrush="#343C47" Foreground="{StaticResource Muted}" FontSize="11"
                  Padding="10" ToolTip="Все метаданные, полученные от станции" />
-        <TextBlock Grid.Column="4" x:Name="StatusText" Text="ГОТОВО" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
+        <TextBlock x:Name="StatusText" Text="ГОТОВО" Visibility="Collapsed" />
       </Grid>
 
       <Grid Grid.Row="1" VerticalAlignment="Center" Margin="0,28">
@@ -109,26 +108,25 @@
               <Ellipse Width="164" Height="164" Fill="#343C47" />
               <TextBlock Text="♪" Foreground="{StaticResource Accent}" FontSize="104" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-10,0,0" />
             </Grid>
-            <Border VerticalAlignment="Bottom" Background="#101216AA" CornerRadius="0,0,20,20" Padding="12,8">
+            <Border VerticalAlignment="Bottom" Background="#101216AA" CornerRadius="0,0,20,20" Padding="12,8" Visibility="Collapsed">
               <TextBlock x:Name="ArtworkCaptionText" Text="ОБЛОЖКА СТАНЦИИ" TextAlignment="Center" FontWeight="Bold" FontSize="10" Foreground="White" />
             </Border>
           </Grid>
         </Border>
-        <Border Grid.Column="2" Background="{StaticResource Panel}" CornerRadius="16" Padding="20">
+        <Border Grid.Column="2" Background="{StaticResource Panel}" CornerRadius="16" Padding="16,14">
           <StackPanel>
-            <TextBlock Text="МЕТАДАННЫЕ ЭФИРА" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="Bold" />
-            <TextBlock x:Name="TrackText" Text="Добавьте URL радиопотока, чтобы начать" FontSize="21" FontWeight="SemiBold" Margin="0,10,0,20" TextWrapping="Wrap" />
+            <TextBlock x:Name="TrackText" Text="Добавьте URL радиопотока, чтобы начать" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" TextWrapping="Wrap" />
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="145" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-              <Grid.RowDefinitions><RowDefinition Height="30" /><RowDefinition Height="30" /><RowDefinition Height="30" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="26" /><RowDefinition Height="26" /><RowDefinition Height="26" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
               <TextBlock Text="СТАНЦИЯ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
               <TextBlock x:Name="MetaStationText" Grid.Column="1" Text="—" VerticalAlignment="Center" />
               <TextBlock Grid.Row="1" Text="ЖАНР / ОПИСАНИЕ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
               <TextBlock x:Name="MetaDescriptionText" Grid.Row="1" Grid.Column="1" Text="—" VerticalAlignment="Center" />
               <TextBlock Grid.Row="2" Text="СТАТУС" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
               <TextBlock x:Name="MetaStatusText" Grid.Row="2" Grid.Column="1" Text="Готово к воспроизведению" VerticalAlignment="Center" />
-              <TextBlock Grid.Row="3" Text="АДРЕС ПОТОКА" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,8,0,0" />
-              <TextBlock x:Name="MetaUrlText" Grid.Row="3" Grid.Column="1" Text="—" Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0" />
+              <TextBlock Grid.Row="3" Text="АДРЕС ПОТОКА" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,4,0,0" />
+              <TextBlock x:Name="MetaUrlText" Grid.Row="3" Grid.Column="1" Text="—" Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
             </Grid>
           </StackPanel>
         </Border>
@@ -138,7 +136,9 @@
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="14" />
+            <RowDefinition Height="8" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="12" />
             <RowDefinition Height="Auto" />
           </Grid.RowDefinitions>
           <Grid>
@@ -166,8 +166,50 @@
             <Button Grid.Column="9" Content="DSP / устройства" Padding="12,8" Click="OpenSoundDevices_Click" ToolTip="Открыть классическую панель устройств и эффектов Windows" />
           </Grid>
           <Grid Grid.Row="2">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-            <TextBox x:Name="StreamUrlBox" VerticalContentAlignment="Center" ToolTip="URL потока: MP3, AAC или совместимый HTTP(S)-поток">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="12" />
+              <ColumnDefinition Width="112" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="112" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="112" />
+            </Grid.ColumnDefinitions>
+            <Border Background="#15171C" BorderBrush="#343B46" BorderThickness="1" Padding="4" ToolTip="Уровень сигнала текущего потока">
+              <UniformGrid x:Name="SignalBarsHost" Columns="48" />
+            </Border>
+            <Border x:Name="RecordingTimer1Slot" Grid.Column="2" Tag="0" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
+              <Border.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Остановить запись" Click="StopRecordingTimerMenu_Click" />
+                  <MenuItem Header="Удалить запись" Click="DeleteRecordingTimerMenu_Click" />
+                </ContextMenu>
+              </Border.ContextMenu>
+              <TextBlock x:Name="RecordingTimer1Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <Border x:Name="RecordingTimer2Slot" Grid.Column="4" Tag="1" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
+              <Border.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Остановить запись" Click="StopRecordingTimerMenu_Click" />
+                  <MenuItem Header="Удалить запись" Click="DeleteRecordingTimerMenu_Click" />
+                </ContextMenu>
+              </Border.ContextMenu>
+              <TextBlock x:Name="RecordingTimer2Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <Border x:Name="RecordingTimer3Slot" Grid.Column="6" Tag="2" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
+              <Border.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Остановить запись" Click="StopRecordingTimerMenu_Click" />
+                  <MenuItem Header="Удалить запись" Click="DeleteRecordingTimerMenu_Click" />
+                </ContextMenu>
+              </Border.ContextMenu>
+              <TextBlock x:Name="RecordingTimer3Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+          </Grid>
+          <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="6" /><ColumnDefinition Width="*" /><ColumnDefinition Width="6" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <Button x:Name="HistoryPreviousButton" Content="&lt;&lt;" Padding="10,8" Click="HistoryPreviousButton_Click" ToolTip="Предыдущий URL из истории прослушивания" />
+            <TextBox Grid.Column="2" x:Name="StreamUrlBox" VerticalContentAlignment="Center" ToolTip="URL потока: MP3, AAC или совместимый HTTP(S)-поток">
               <TextBox.ContextMenu>
                 <ContextMenu>
                   <MenuItem Header="Вставить новый URL (заменить)" Click="PasteReplacementUrl_Click" />
@@ -177,9 +219,10 @@
                 </ContextMenu>
               </TextBox.ContextMenu>
             </TextBox>
-            <Button Grid.Column="2" x:Name="PlayButton" Content="▶  Слушать" Background="{StaticResource Accent}" Foreground="#102018" Click="PlayButton_Click" />
-            <Button Grid.Column="4" Content="■" ToolTip="Остановить" Click="StopButton_Click" />
-            <Button Grid.Column="6" x:Name="RecordButton" ToolTip="Сохранить текущую песню из MP3-буфера" Click="RecordButton_Click">
+            <Button Grid.Column="4" x:Name="HistoryNextButton" Content="&gt;&gt;" Padding="10,8" Click="HistoryNextButton_Click" ToolTip="Следующий URL из истории прослушивания" />
+            <Button Grid.Column="6" x:Name="PlayButton" Content="▶  Слушать" Background="{StaticResource Accent}" Foreground="#102018" Click="PlayButton_Click" />
+            <Button Grid.Column="8" Content="■" ToolTip="Остановить" Click="StopButton_Click" />
+            <Button Grid.Column="10" x:Name="RecordButton" ToolTip="Сохранить текущую песню из MP3-буфера" Click="RecordButton_Click">
               <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Ellipse x:Name="RecordStatusDot" Width="7" Height="7" Fill="White" VerticalAlignment="Center" />
                 <TextBlock Text="Запись" Margin="6,0" VerticalAlignment="Center" />
