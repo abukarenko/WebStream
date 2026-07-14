@@ -160,10 +160,7 @@
             <Slider x:Name="VolumeSlider" Grid.Column="2" Minimum="0" Maximum="100" Value="30"
                     TickFrequency="5" IsSnapToTickEnabled="False" VerticalAlignment="Center"
                     ValueChanged="VolumeSlider_ValueChanged" ToolTip="Громкость WebStream" />
-            <Button Grid.Column="4" x:Name="MuteButton" Content="Выкл." Padding="12,8" Click="MuteButton_Click" ToolTip="Включить или выключить звук WebStream" />
-            <TextBlock Grid.Column="6" Text="СИСТЕМА" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,10,0" />
-            <Button Grid.Column="7" Content="Параметры звука" Padding="12,8" Click="OpenSoundSettings_Click" ToolTip="Открыть параметры звука Windows" />
-            <Button Grid.Column="9" Content="DSP / устройства" Padding="12,8" Click="OpenSoundDevices_Click" ToolTip="Открыть классическую панель устройств и эффектов Windows" />
+            <Button Grid.Column="4" x:Name="MuteButton" Content="mute" Padding="12,8" Click="MuteButton_Click" ToolTip="Включить или выключить звук WebStream" />
           </Grid>
           <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>

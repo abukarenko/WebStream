@@ -792,7 +792,7 @@ public partial class MainWindow : Window
         Player.Volume = volume;
         VolumeValueText.Text = Math.Round(volume * 100).ToString("0");
         VolumeIconText.Text = volume <= 0 ? "🔇" : "🔊";
-        MuteButton.Content = volume <= 0 ? "Вкл." : "Выкл.";
+        MuteButton.Content = volume <= 0 ? "unmute" : "mute";
     }
 
     protected override void OnClosed(EventArgs e)
