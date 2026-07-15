@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -7,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -23,10 +25,13 @@ public partial class MainWindow : Window
     private const int SignalBarCount = 48;
     private const double SignalReferenceFloor = 0.01;
     private const long AudioBufferBytes = 32L * 1024 * 1024;
+    private static readonly TimeSpan MetadataTrackDelay = TimeSpan.FromSeconds(12);
     private static readonly HttpClient MetadataClient = new();
     private readonly AudioBackBuffer _audioBuffer = new(AudioBufferBytes);
     private readonly ObservableCollection<RadioStation> _stations = new();
     private readonly ObservableCollection<RadioStation> _history = new();
+    private ICollectionView? _stationsView;
+    private ICollectionView? _historyView;
     private readonly List<RadioStation> _urlHistory = new();
     private readonly List<ActiveSongRecording> _songRecordings = new();
     private readonly List<Rectangle> _signalBars = new();
@@ -45,16 +50,20 @@ public partial class MainWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "url-history.json");
     private bool _isPlaying;
     private CancellationTokenSource? _metadataCancellation;
+    private CancellationTokenSource? _pendingTrackCancellation;
     private CancellationTokenSource? _signalCancellation;
     private Process? _signalProcess;
     private double _signalReferenceLevel = SignalReferenceFloor;
     private int _historyNavigationIndex = -1;
     private bool _isNavigatingUrlHistory;
+    private bool _isListFilterActive;
+    private StationSearchWindow? _searchWindow;
     private Uri? _currentStreamUri;
     private long _currentTrackStartPosition;
     private DateTime _currentTrackStartedAt = DateTime.Now;
     private string? _currentTrackTitle;
     private string? _currentTrackKey;
+    private string? _pendingTrackKey;
     private string? _currentArtworkUrl;
     private string? _lastArtworkQuery;
     private bool _hasStreamArtwork;
@@ -68,6 +77,10 @@ public partial class MainWindow : Window
         StateChanged += MainWindow_StateChanged;
         StationsList.ItemsSource = _stations;
         HistoryList.ItemsSource = _history;
+        _stationsView = CollectionViewSource.GetDefaultView(_stations);
+        _historyView = CollectionViewSource.GetDefaultView(_history);
+        _stationsView.Filter = FilterRadioStation;
+        _historyView.Filter = FilterRadioStation;
         SetPlayerVolume(VolumeSlider.Value / 100);
         InitializeSignalBars();
         UpdateRecordingIndicator();
@@ -83,6 +96,7 @@ public partial class MainWindow : Window
         LoadUrlHistory();
         LoadActiveRecordings();
         LoadAppState();
+        UpdateListFilterButton();
     }
 
     private void AddBuiltInStations()
@@ -98,11 +112,59 @@ public partial class MainWindow : Window
         SelectStation(station);
     }
 
-    private void HistoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void HistoryList_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (HistoryList.SelectedItem is not RadioStation station) return;
         StationsList.SelectedItem = null;
         SelectStation(station);
+    }
+
+    private void ListFilterTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        RefreshListFilter();
+    }
+
+    private void ListFilterButton_Click(object sender, RoutedEventArgs e)
+    {
+        _isListFilterActive = !_isListFilterActive;
+        UpdateListFilterButton();
+        RefreshListFilter();
+    }
+
+    private bool FilterRadioStation(object item)
+    {
+        if (!_isListFilterActive) return true;
+        if (item is not RadioStation station) return true;
+
+        var filter = ListFilterTextBox?.Text.Trim();
+        if (string.IsNullOrWhiteSpace(filter)) return true;
+
+        return ContainsFilter(station.Name, filter)
+            || ContainsFilter(station.Description, filter)
+            || ContainsFilter(station.StreamUrl, filter)
+            || ContainsFilter(station.PlayedAt?.ToString("dd.MM.yyyy HH:mm:ss"), filter);
+    }
+
+    private void RefreshListFilter()
+    {
+        _stationsView?.Refresh();
+        _historyView?.Refresh();
+    }
+
+    private void UpdateListFilterButton()
+    {
+        ListFilterButton.BorderBrush = _isListFilterActive
+            ? (System.Windows.Media.Brush)FindResource("Accent")
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(58, 64, 74));
+        ListFilterButton.BorderThickness = _isListFilterActive ? new Thickness(2) : new Thickness(1);
+        ListFilterIconPath.Opacity = _isListFilterActive ? 1 : 0.55;
+        ListFilterClearPath.Opacity = _isListFilterActive ? 0 : 1;
+    }
+
+    private static bool ContainsFilter(string? value, string filter)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && value.Contains(filter, StringComparison.CurrentCultureIgnoreCase);
     }
 
     private void ShowHistoryPanel_Click(object sender, RoutedEventArgs e)
@@ -125,6 +187,81 @@ public partial class MainWindow : Window
         HistoryPanelButton.ClearValue(ForegroundProperty);
     }
 
+    private void SearchButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_searchWindow is not null)
+        {
+            _searchWindow.Activate();
+            return;
+        }
+
+        _searchWindow = new StationSearchWindow(this)
+        {
+            Owner = this
+        };
+        _searchWindow.Closed += (_, _) => _searchWindow = null;
+        _searchWindow.Show();
+    }
+
+    internal void PreviewSearchStation(SearchStationItem station)
+    {
+        ApplySearchStation(station);
+        StartPlayback();
+    }
+
+    internal bool AddSearchStationToPlaylist(SearchStationItem station)
+    {
+        ApplySearchStation(station);
+        var radioStation = new RadioStation(station.Name, station.Description, station.StreamUrl, DateTime.Now);
+        if (_stations.Any(item => string.Equals(item.StreamUrl, station.StreamUrl, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        _stations.Insert(0, radioStation);
+        SavePlaylist();
+        return true;
+    }
+
+    internal void PausePlaybackFromSearch()
+    {
+        if (!_isPlaying) return;
+        Player.Pause();
+        _isPlaying = false;
+        PlayButton.Content = "▶  Слушать";
+        StatusText.Text = "ПАУЗА";
+        StopSignalAnalyzer();
+        SaveAppState();
+    }
+
+    internal void StopPlaybackFromSearch()
+    {
+        Player.Stop();
+        StopMetadataReader();
+        StopSignalAnalyzer();
+        _isPlaying = false;
+        PlayButton.Content = "▶  Слушать";
+        StatusText.Text = "ОСТАНОВЛЕНО";
+        TrackText.Text = "Воспроизведение остановлено.";
+        MetaStatusText.Text = "Воспроизведение остановлено";
+        SaveAppState();
+    }
+
+    internal void SetSearchPlaybackVolume(double value)
+    {
+        VolumeSlider.Value = Math.Clamp(value, 0, 100);
+    }
+
+    internal double CurrentPlaybackVolumePercent => Player.Volume * 100;
+
+    private void ApplySearchStation(SearchStationItem station)
+    {
+        StreamUrlBox.Text = station.StreamUrl;
+        StationNameText.Text = string.IsNullOrWhiteSpace(station.Name) ? "Мой поток" : station.Name;
+        TrackText.Text = string.IsNullOrWhiteSpace(station.Description)
+            ? "Ссылка перенесена из поиска."
+            : station.Description;
+        UpdateMetadata(StationNameText.Text, TrackText.Text, station.StreamUrl, "Ссылка перенесена из поиска");
+    }
+
     private void AddHistoryItemToPlaylist_Click(object sender, RoutedEventArgs e)
     {
         if (!TryGetContextStation(sender, out var station)) return;
@@ -132,6 +269,12 @@ public partial class MainWindow : Window
 
         _stations.Insert(0, station);
         SavePlaylist();
+    }
+
+    private void ClearHistory_Click(object sender, RoutedEventArgs e)
+    {
+        _history.Clear();
+        SaveHistory();
     }
 
     private void RemovePlaylistItem_Click(object sender, RoutedEventArgs e)
@@ -196,6 +339,7 @@ public partial class MainWindow : Window
         _currentTrackStartedAt = DateTime.Now;
         _currentTrackTitle = null;
         _currentTrackKey = null;
+        CancelPendingTrackUpdate();
         Player.Stop();
         ResetArtwork();
         Player.Source = uri;
@@ -1038,6 +1182,7 @@ public partial class MainWindow : Window
         _metadataCancellation?.Cancel();
         _metadataCancellation?.Dispose();
         _metadataCancellation = null;
+        CancelPendingTrackUpdate();
     }
 
     private async Task ReadIcyMetadataAsync(Uri streamUri, CancellationToken cancellationToken)
@@ -1077,7 +1222,7 @@ public partial class MainWindow : Window
                 var title = ExtractStreamTitle(text);
                 await Dispatcher.InvokeAsync(() => AppendMetadata($"ICY metadata\n{text.Trim('\0', ' ')}"));
                 if (!string.IsNullOrWhiteSpace(title))
-                    await Dispatcher.InvokeAsync(() => SetCurrentTrack(title));
+                    await Dispatcher.InvokeAsync(() => ScheduleCurrentTrack(title));
                 var coverUrl = ExtractCoverArtUrl(text);
                 if (!string.IsNullOrWhiteSpace(coverUrl))
                     await Dispatcher.InvokeAsync(() => SetArtwork(coverUrl));
@@ -1116,7 +1261,7 @@ public partial class MainWindow : Window
                     var artist = ExtractHlsAttribute(metadataLine, "artist");
                     var track = string.IsNullOrWhiteSpace(artist) ? title : $"{artist} — {title}";
                     if (!string.IsNullOrWhiteSpace(track))
-                        await Dispatcher.InvokeAsync(() => SetCurrentTrack(track));
+                        await Dispatcher.InvokeAsync(() => ScheduleCurrentTrack(track));
 
                     var artwork = ExtractHlsArtworkUrl(metadataLine);
                     if (!string.IsNullOrWhiteSpace(artwork))
@@ -1294,6 +1439,51 @@ public partial class MainWindow : Window
         _ = FindArtworkAsync(title, _metadataCancellation?.Token ?? CancellationToken.None);
     }
 
+    private void ScheduleCurrentTrack(string title)
+    {
+        var normalizedTitle = NormalizeTitle(title);
+        var songKey = BuildSongCompareKey(normalizedTitle);
+        if (string.IsNullOrWhiteSpace(normalizedTitle) || string.IsNullOrWhiteSpace(songKey)) return;
+
+        if (string.Equals(_currentTrackKey, songKey, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(_pendingTrackKey, songKey, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        CancelPendingTrackUpdate();
+        _pendingTrackKey = songKey;
+        _pendingTrackCancellation = new CancellationTokenSource();
+        var token = _pendingTrackCancellation.Token;
+        _ = ApplyDelayedTrackAsync(normalizedTitle, token);
+        MetaStatusText.Text = $"Новые метаданные · применю через {MetadataTrackDelay.TotalSeconds:0} сек";
+    }
+
+    private async Task ApplyDelayedTrackAsync(string title, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(MetadataTrackDelay, cancellationToken);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (cancellationToken.IsCancellationRequested) return;
+                SetCurrentTrack(title);
+                _pendingTrackKey = null;
+                _pendingTrackCancellation?.Dispose();
+                _pendingTrackCancellation = null;
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void CancelPendingTrackUpdate()
+    {
+        _pendingTrackCancellation?.Cancel();
+        _pendingTrackCancellation?.Dispose();
+        _pendingTrackCancellation = null;
+        _pendingTrackKey = null;
+    }
+
     private void UpdateCurrentUrlHistoryMetadata()
     {
         var streamUrl = StreamUrlBox.Text.Trim();
@@ -1409,7 +1599,11 @@ public partial class MainWindow : Window
         var existing = _history.FirstOrDefault(item => string.Equals(item.StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase));
         if (existing is not null) _history.Remove(existing);
         _history.Insert(0, station);
+        SaveHistory();
+    }
 
+    private void SaveHistory()
+    {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_historyPath)!);

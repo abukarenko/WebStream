@@ -18,16 +18,38 @@
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="8" />
             <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="8" />
+            <ColumnDefinition Width="*" />
           </Grid.ColumnDefinitions>
           <Button x:Name="HistoryPanelButton" Content="История" Padding="10,8" Background="{StaticResource Accent}" Foreground="#102018" Click="ShowHistoryPanel_Click" />
           <Button x:Name="PlaylistPanelButton" Grid.Column="2" Content="Плейлист" Padding="10,8" Click="ShowPlaylistPanel_Click" />
+          <Button x:Name="SearchButton" Grid.Column="4" Content="Поиск" Padding="10,8" Click="SearchButton_Click" />
+        </Grid>
+
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="8" />
+            <ColumnDefinition Width="38" />
+          </Grid.ColumnDefinitions>
+          <TextBox x:Name="ListFilterTextBox" VerticalContentAlignment="Center" ToolTip="Фильтр по названию, жанру, описанию или адресу"
+                   TextChanged="ListFilterTextBox_TextChanged" />
+          <Button x:Name="ListFilterButton" Grid.Column="2" Padding="0" Background="#101216" BorderBrush="#3A404A"
+                  ToolTip="Включить или выключить фильтр списка" Click="ListFilterButton_Click">
+            <Viewbox Width="20" Height="20">
+              <Canvas Width="24" Height="24">
+                <Path x:Name="ListFilterIconPath" Fill="White" Data="M3,4 L21,4 L14,12 L14,19 L10,21 L10,12 Z" />
+                <Path x:Name="ListFilterClearPath" Stroke="White" StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      Data="M16,16 L22,22 M22,16 L16,22" />
+              </Canvas>
+            </Viewbox>
+          </Button>
         </Grid>
 
         <Grid x:Name="HistoryPanel">
           <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="УСПЕШНО ЗАПУЩЕННЫЕ СТАНЦИИ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,0,0,8" />
             <ListBox x:Name="HistoryList" Background="Transparent" BorderThickness="0" Foreground="White"
-                     SelectionChanged="HistoryList_SelectionChanged" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     MouseDoubleClick="HistoryList_MouseDoubleClick" ScrollViewer.VerticalScrollBarVisibility="Auto"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
               <ListBox.ItemTemplate>
                 <DataTemplate>
@@ -35,6 +57,8 @@
                     <StackPanel.ContextMenu>
                       <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                         <MenuItem Header="Добавить в плейлист" Click="AddHistoryItemToPlaylist_Click" />
+                        <Separator />
+                        <MenuItem Header="Очистить историю" Click="ClearHistory_Click" />
                       </ContextMenu>
                     </StackPanel.ContextMenu>
                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
@@ -49,7 +73,6 @@
 
         <Grid x:Name="PlaylistPanel" Visibility="Collapsed">
           <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="БЫСТРЫЙ ВЫБОР" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,0,0,8" />
             <ListBox x:Name="StationsList" Background="Transparent" BorderThickness="0" Foreground="White"
                      SelectionChanged="StationsList_SelectionChanged" ScrollViewer.VerticalScrollBarVisibility="Auto"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -161,6 +184,14 @@
                     TickFrequency="5" IsSnapToTickEnabled="False" VerticalAlignment="Center"
                     ValueChanged="VolumeSlider_ValueChanged" ToolTip="Громкость WebStream" />
             <Button Grid.Column="4" x:Name="MuteButton" Content="mute" Padding="12,8" Click="MuteButton_Click" ToolTip="Включить или выключить звук WebStream" />
+            <Button Grid.Column="6" Width="40" Height="34" Padding="0" Click="OpenSoundSettings_Click" ToolTip="Открыть настройки звука Windows">
+              <Viewbox Width="22" Height="22">
+                <Canvas Width="24" Height="24">
+                  <Path Fill="#BFC6D1" Data="M19.4,13.5 C19.5,13.0 19.5,12.5 19.5,12 C19.5,11.5 19.5,11 19.4,10.5 L22,8.5 L19.5,4.2 L16.4,5.4 C15.6,4.8 14.8,4.3 13.8,4 L13.4,0.8 L8.6,0.8 L8.2,4 C7.2,4.3 6.4,4.8 5.6,5.4 L2.5,4.2 L0,8.5 L2.6,10.5 C2.5,11 2.5,11.5 2.5,12 C2.5,12.5 2.5,13 2.6,13.5 L0,15.5 L2.5,19.8 L5.6,18.6 C6.4,19.2 7.2,19.7 8.2,20 L8.6,23.2 L13.4,23.2 L13.8,20 C14.8,19.7 15.6,19.2 16.4,18.6 L19.5,19.8 L22,15.5 Z" />
+                  <Ellipse Width="10" Height="10" Canvas.Left="6" Canvas.Top="7" Fill="#0B86D1" Stroke="White" StrokeThickness="2" />
+                </Canvas>
+              </Viewbox>
+            </Button>
           </Grid>
           <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
