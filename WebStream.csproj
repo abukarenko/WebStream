@@ -12,5 +12,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\webstream.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="strings.ini" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

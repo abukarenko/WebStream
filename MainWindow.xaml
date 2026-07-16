@@ -20,10 +20,13 @@
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="8" />
             <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="8" />
+            <ColumnDefinition Width="*" />
           </Grid.ColumnDefinitions>
-          <Button x:Name="HistoryPanelButton" Content="История" Padding="10,8" Background="{StaticResource Accent}" Foreground="#102018" Click="ShowHistoryPanel_Click" />
-          <Button x:Name="PlaylistPanelButton" Grid.Column="2" Content="Плейлист" Padding="10,8" Click="ShowPlaylistPanel_Click" />
-          <Button x:Name="SearchButton" Grid.Column="4" Content="Поиск" Padding="10,8" Click="SearchButton_Click" />
+          <Button x:Name="HistoryPanelButton" Content="{DynamicResource TabHistory}" Padding="10,8" Background="{StaticResource Accent}" Foreground="#102018" Click="ShowHistoryPanel_Click" />
+          <Button x:Name="PlaylistPanelButton" Grid.Column="2" Content="{DynamicResource TabPlaylist}" Padding="10,8" Click="ShowPlaylistPanel_Click" />
+          <Button x:Name="SearchButton" Grid.Column="4" Content="{DynamicResource TabSearch}" Padding="10,8" Click="SearchButton_Click" />
+          <Button x:Name="RecordedTracksButton" Grid.Column="6" Content="{DynamicResource TabRecorded}" Padding="10,8" Click="RecordedTracksButton_Click" />
         </Grid>
 
         <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
@@ -32,10 +35,10 @@
             <ColumnDefinition Width="8" />
             <ColumnDefinition Width="38" />
           </Grid.ColumnDefinitions>
-          <TextBox x:Name="ListFilterTextBox" VerticalContentAlignment="Center" ToolTip="Фильтр по названию, жанру, описанию или адресу"
+          <TextBox x:Name="ListFilterTextBox" VerticalContentAlignment="Center" ToolTip="{DynamicResource FilterToolTip}"
                    TextChanged="ListFilterTextBox_TextChanged" />
           <Button x:Name="ListFilterButton" Grid.Column="2" Padding="0" Background="#101216" BorderBrush="#3A404A"
-                  ToolTip="Включить или выключить фильтр списка" Click="ListFilterButton_Click">
+                  ToolTip="{DynamicResource FilterButtonToolTip}" Click="ListFilterButton_Click">
             <Viewbox Width="20" Height="20">
               <Canvas Width="24" Height="24">
                 <Path x:Name="ListFilterIconPath" Fill="White" Data="M3,4 L21,4 L14,12 L14,19 L10,21 L10,12 Z" />
@@ -56,9 +59,9 @@
                   <StackPanel Margin="6,4">
                     <StackPanel.ContextMenu>
                       <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-                        <MenuItem Header="Добавить в плейлист" Click="AddHistoryItemToPlaylist_Click" />
+                        <MenuItem Header="{DynamicResource AddToPlaylist}" Click="AddHistoryItemToPlaylist_Click" />
                         <Separator />
-                        <MenuItem Header="Очистить историю" Click="ClearHistory_Click" />
+                        <MenuItem Header="{DynamicResource ClearHistory}" Click="ClearHistory_Click" />
                       </ContextMenu>
                     </StackPanel.ContextMenu>
                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
@@ -81,7 +84,7 @@
                   <StackPanel Margin="6,4">
                     <StackPanel.ContextMenu>
                       <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-                        <MenuItem Header="Удалить из плейлиста" Click="RemovePlaylistItem_Click" />
+                        <MenuItem Header="{DynamicResource RemoveFromPlaylist}" Click="RemovePlaylistItem_Click" />
                       </ContextMenu>
                     </StackPanel.ContextMenu>
                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
@@ -108,47 +111,47 @@
           <ColumnDefinition Width="360" />
         </Grid.ColumnDefinitions>
         <StackPanel>
-          <TextBlock Text="СЕЙЧАС В ЭФИРЕ" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="Bold" />
-          <TextBlock x:Name="StationNameText" Text="Выберите станцию" FontSize="28" FontWeight="SemiBold" Margin="0,8,0,0" />
+          <TextBlock Text="{DynamicResource NowOnAir}" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="Bold" />
+          <TextBlock x:Name="StationNameText" Text="{DynamicResource SelectStation}" FontSize="28" FontWeight="SemiBold" Margin="0,8,0,0" />
         </StackPanel>
         <TextBox Grid.Column="2" x:Name="MetadataLogText" Height="116" IsReadOnly="True" AcceptsReturn="True"
                  TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                  Background="#101216" BorderBrush="#343C47" Foreground="{StaticResource Muted}" FontSize="11"
-                 Padding="10" ToolTip="Все метаданные, полученные от станции" />
-        <TextBlock x:Name="StatusText" Text="ГОТОВО" Visibility="Collapsed" />
+                 Padding="10" ToolTip="{DynamicResource MetadataLogToolTip}" />
+        <TextBlock x:Name="StatusText" Text="{DynamicResource Ready}" Visibility="Collapsed" />
       </Grid>
 
-      <Grid Grid.Row="1" VerticalAlignment="Center" Margin="0,28">
+      <Grid Grid.Row="1" VerticalAlignment="Center" Margin="0,16">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="230" />
           <ColumnDefinition Width="34" />
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
-        <Border Grid.Column="0" Width="220" Height="220" CornerRadius="20" Background="#2B313A" HorizontalAlignment="Center">
+        <Border Grid.Column="0" Width="180" Height="180" CornerRadius="16" Background="#2B313A" HorizontalAlignment="Center">
           <Grid>
             <Image x:Name="ArtworkImage" Stretch="UniformToFill" Visibility="Collapsed" ImageFailed="ArtworkImage_ImageFailed" />
             <Grid x:Name="ArtworkPlaceholder">
-              <Ellipse Width="164" Height="164" Fill="#343C47" />
-              <TextBlock Text="♪" Foreground="{StaticResource Accent}" FontSize="104" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-10,0,0" />
+              <Ellipse Width="134" Height="134" Fill="#343C47" />
+              <TextBlock Text="♪" Foreground="{StaticResource Accent}" FontSize="84" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-7,0,0" />
             </Grid>
-            <Border VerticalAlignment="Bottom" Background="#101216AA" CornerRadius="0,0,20,20" Padding="12,8" Visibility="Collapsed">
-              <TextBlock x:Name="ArtworkCaptionText" Text="ОБЛОЖКА СТАНЦИИ" TextAlignment="Center" FontWeight="Bold" FontSize="10" Foreground="White" />
+            <Border VerticalAlignment="Bottom" Background="#101216AA" CornerRadius="0,0,16,16" Padding="12,8" Visibility="Collapsed">
+              <TextBlock x:Name="ArtworkCaptionText" Text="{DynamicResource ArtworkCaption}" TextAlignment="Center" FontWeight="Bold" FontSize="10" Foreground="White" />
             </Border>
           </Grid>
         </Border>
         <Border Grid.Column="2" Background="{StaticResource Panel}" CornerRadius="16" Padding="16,14">
           <StackPanel>
-            <TextBlock x:Name="TrackText" Text="Добавьте URL радиопотока, чтобы начать" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" TextWrapping="Wrap" />
+            <TextBlock x:Name="TrackText" Text="{DynamicResource TrackStartHint}" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12" TextWrapping="Wrap" />
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="145" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
               <Grid.RowDefinitions><RowDefinition Height="26" /><RowDefinition Height="26" /><RowDefinition Height="26" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-              <TextBlock Text="СТАНЦИЯ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
+              <TextBlock Text="{DynamicResource MetaStation}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
               <TextBlock x:Name="MetaStationText" Grid.Column="1" Text="—" VerticalAlignment="Center" />
-              <TextBlock Grid.Row="1" Text="ЖАНР / ОПИСАНИЕ" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="1" Text="{DynamicResource MetaGenre}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
               <TextBlock x:Name="MetaDescriptionText" Grid.Row="1" Grid.Column="1" Text="—" VerticalAlignment="Center" />
-              <TextBlock Grid.Row="2" Text="СТАТУС" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
-              <TextBlock x:Name="MetaStatusText" Grid.Row="2" Grid.Column="1" Text="Готово к воспроизведению" VerticalAlignment="Center" />
-              <TextBlock Grid.Row="3" Text="АДРЕС ПОТОКА" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,4,0,0" />
+              <TextBlock Grid.Row="2" Text="{DynamicResource MetaStatus}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" />
+              <TextBlock x:Name="MetaStatusText" Grid.Row="2" Grid.Column="1" Text="{DynamicResource ReadyToPlay}" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="3" Text="{DynamicResource MetaUrl}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,4,0,0" />
               <TextBlock x:Name="MetaUrlText" Grid.Row="3" Grid.Column="1" Text="—" Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
             </Grid>
           </StackPanel>
@@ -159,32 +162,31 @@
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="8" />
-            <RowDefinition Height="28" />
             <RowDefinition Height="12" />
+            <RowDefinition Height="28" />
+            <RowDefinition Height="18" />
             <RowDefinition Height="Auto" />
           </Grid.RowDefinitions>
           <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="Auto" />
               <ColumnDefinition Width="42" />
-              <ColumnDefinition Width="210" />
-              <ColumnDefinition Width="10" />
-              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="300" />
               <ColumnDefinition Width="*" />
-              <ColumnDefinition Width="Auto" />
-              <ColumnDefinition Width="10" />
-              <ColumnDefinition Width="Auto" />
-              <ColumnDefinition Width="10" />
-              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="78" />
+              <ColumnDefinition Width="12" />
+              <ColumnDefinition Width="78" />
+              <ColumnDefinition Width="12" />
+              <ColumnDefinition Width="48" />
             </Grid.ColumnDefinitions>
             <TextBlock x:Name="VolumeIconText" Text="🔊" FontSize="18" VerticalAlignment="Center" />
             <TextBlock x:Name="VolumeValueText" Grid.Column="1" Text="30" Foreground="{StaticResource Muted}" FontWeight="SemiBold" VerticalAlignment="Center" TextAlignment="Center" />
             <Slider x:Name="VolumeSlider" Grid.Column="2" Minimum="0" Maximum="100" Value="30"
                     TickFrequency="5" IsSnapToTickEnabled="False" VerticalAlignment="Center"
-                    ValueChanged="VolumeSlider_ValueChanged" ToolTip="Громкость WebStream" />
-            <Button Grid.Column="4" x:Name="MuteButton" Content="mute" Padding="12,8" Click="MuteButton_Click" ToolTip="Включить или выключить звук WebStream" />
-            <Button Grid.Column="6" Width="40" Height="34" Padding="0" Click="OpenSoundSettings_Click" ToolTip="Открыть настройки звука Windows">
+                    ValueChanged="VolumeSlider_ValueChanged" ToolTip="{DynamicResource VolumeToolTip}" />
+            <Button Grid.Column="4" x:Name="MuteButton" Content="{DynamicResource MuteOn}" Padding="0" Click="MuteButton_Click" ToolTip="{DynamicResource MuteToolTip}" />
+            <Button Grid.Column="6" x:Name="LanguageButton" Padding="0" Content="{DynamicResource LangButton}" FontSize="13" FontWeight="Bold" Click="LanguageButton_Click" ToolTip="RU / EN" />
+            <Button Grid.Column="8" Padding="0" Click="OpenSoundSettings_Click" ToolTip="{DynamicResource SoundSettingsToolTip}">
               <Viewbox Width="22" Height="22">
                 <Canvas Width="24" Height="24">
                   <Path Fill="#BFC6D1" Data="M19.4,13.5 C19.5,13.0 19.5,12.5 19.5,12 C19.5,11.5 19.5,11 19.4,10.5 L22,8.5 L19.5,4.2 L16.4,5.4 C15.6,4.8 14.8,4.3 13.8,4 L13.4,0.8 L8.6,0.8 L8.2,4 C7.2,4.3 6.4,4.8 5.6,5.4 L2.5,4.2 L0,8.5 L2.6,10.5 C2.5,11 2.5,11.5 2.5,12 C2.5,12.5 2.5,13 2.6,13.5 L0,15.5 L2.5,19.8 L5.6,18.6 C6.4,19.2 7.2,19.7 8.2,20 L8.6,23.2 L13.4,23.2 L13.8,20 C14.8,19.7 15.6,19.2 16.4,18.6 L19.5,19.8 L22,15.5 Z" />
@@ -195,65 +197,81 @@
           </Grid>
           <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="48" />
+              <ColumnDefinition Width="8" />
               <ColumnDefinition Width="*" />
-              <ColumnDefinition Width="12" />
-              <ColumnDefinition Width="112" />
               <ColumnDefinition Width="8" />
-              <ColumnDefinition Width="112" />
+              <ColumnDefinition Width="48" />
+              <ColumnDefinition Width="14" />
+              <ColumnDefinition Width="88" />
               <ColumnDefinition Width="8" />
-              <ColumnDefinition Width="112" />
+              <ColumnDefinition Width="88" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="88" />
             </Grid.ColumnDefinitions>
-            <Border Background="#15171C" BorderBrush="#343B46" BorderThickness="1" Padding="4" ToolTip="Уровень сигнала текущего потока">
+            <Border Grid.ColumnSpan="5" Background="#15171C" BorderBrush="#343B46" BorderThickness="1" Padding="4" ToolTip="{DynamicResource SignalToolTip}">
               <UniformGrid x:Name="SignalBarsHost" Columns="48" />
             </Border>
-            <Border x:Name="RecordingTimer1Slot" Grid.Column="2" Tag="0" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
+            <Border x:Name="RecordingTimer1Slot" Grid.Column="6" Tag="0" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
               <Border.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Остановить запись" Click="StopRecordingTimerMenu_Click" />
-                  <MenuItem Header="Удалить запись" Click="DeleteRecordingTimerMenu_Click" />
+                  <MenuItem Header="{DynamicResource TimerStopRecording}" Click="StopRecordingTimerMenu_Click" />
+                  <MenuItem Header="{DynamicResource TimerDeleteRecording}" Click="DeleteRecordingTimerMenu_Click" />
                 </ContextMenu>
               </Border.ContextMenu>
-              <TextBlock x:Name="RecordingTimer1Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              <TextBlock x:Name="RecordingTimer1Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Border>
-            <Border x:Name="RecordingTimer2Slot" Grid.Column="4" Tag="1" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
+            <Border x:Name="RecordingTimer2Slot" Grid.Column="8" Tag="1" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
               <Border.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Остановить запись" Click="StopRecordingTimerMenu_Click" />
-                  <MenuItem Header="Удалить запись" Click="DeleteRecordingTimerMenu_Click" />
+                  <MenuItem Header="{DynamicResource TimerStopRecording}" Click="StopRecordingTimerMenu_Click" />
+                  <MenuItem Header="{DynamicResource TimerDeleteRecording}" Click="DeleteRecordingTimerMenu_Click" />
                 </ContextMenu>
               </Border.ContextMenu>
-              <TextBlock x:Name="RecordingTimer2Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              <TextBlock x:Name="RecordingTimer2Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Border>
-            <Border x:Name="RecordingTimer3Slot" Grid.Column="6" Tag="2" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
+            <Border x:Name="RecordingTimer3Slot" Grid.Column="10" Tag="2" Background="#15171C" BorderBrush="#6A7078" BorderThickness="1" ToolTip="" MouseLeftButtonUp="RecordingTimerSlot_LeftClick">
               <Border.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Остановить запись" Click="StopRecordingTimerMenu_Click" />
-                  <MenuItem Header="Удалить запись" Click="DeleteRecordingTimerMenu_Click" />
+                  <MenuItem Header="{DynamicResource TimerStopRecording}" Click="StopRecordingTimerMenu_Click" />
+                  <MenuItem Header="{DynamicResource TimerDeleteRecording}" Click="DeleteRecordingTimerMenu_Click" />
                 </ContextMenu>
               </Border.ContextMenu>
-              <TextBlock x:Name="RecordingTimer3Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              <TextBlock x:Name="RecordingTimer3Text" Text="" Foreground="#DDECCF" FontFamily="Consolas" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Border>
           </Grid>
           <Grid Grid.Row="4">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="6" /><ColumnDefinition Width="*" /><ColumnDefinition Width="6" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="12" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-            <Button x:Name="HistoryPreviousButton" Content="&lt;&lt;" Padding="10,8" Click="HistoryPreviousButton_Click" ToolTip="Предыдущий URL из истории прослушивания" />
-            <TextBox Grid.Column="2" x:Name="StreamUrlBox" VerticalContentAlignment="Center" ToolTip="URL потока: MP3, AAC или совместимый HTTP(S)-поток">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="48" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="48" />
+              <ColumnDefinition Width="14" />
+              <ColumnDefinition Width="56" />
+              <ColumnDefinition Width="10" />
+              <ColumnDefinition Width="56" />
+              <ColumnDefinition Width="14" />
+              <ColumnDefinition Width="146" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="HistoryPreviousButton" Content="&lt;&lt;" FontSize="18" FontWeight="Bold" Padding="0" Click="HistoryPreviousButton_Click" ToolTip="{DynamicResource PreviousUrlToolTip}" />
+            <TextBox Grid.Column="2" x:Name="StreamUrlBox" FontSize="17" VerticalContentAlignment="Center" ToolTip="{DynamicResource StreamUrlToolTip}">
               <TextBox.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Вставить новый URL (заменить)" Click="PasteReplacementUrl_Click" />
-                  <MenuItem Header="Очистить поле" Click="ClearStreamUrl_Click" />
+                  <MenuItem Header="{DynamicResource PasteReplaceUrl}" Click="PasteReplacementUrl_Click" />
+                  <MenuItem Header="{DynamicResource ClearUrl}" Click="ClearStreamUrl_Click" />
                   <Separator />
-                  <MenuItem Header="Выделить всё" Click="SelectAllStreamUrl_Click" />
+                  <MenuItem Header="{DynamicResource SelectAll}" Click="SelectAllStreamUrl_Click" />
                 </ContextMenu>
               </TextBox.ContextMenu>
             </TextBox>
-            <Button Grid.Column="4" x:Name="HistoryNextButton" Content="&gt;&gt;" Padding="10,8" Click="HistoryNextButton_Click" ToolTip="Следующий URL из истории прослушивания" />
-            <Button Grid.Column="6" x:Name="PlayButton" Content="▶  Слушать" Background="{StaticResource Accent}" Foreground="#102018" Click="PlayButton_Click" />
-            <Button Grid.Column="8" Content="■" ToolTip="Остановить" Click="StopButton_Click" />
-            <Button Grid.Column="10" x:Name="RecordButton" ToolTip="Сохранить текущую песню из MP3-буфера" Click="RecordButton_Click">
+            <Button Grid.Column="4" x:Name="HistoryNextButton" Content="&gt;&gt;" FontSize="18" FontWeight="Bold" Padding="0" Click="HistoryNextButton_Click" ToolTip="{DynamicResource NextUrlToolTip}" />
+            <Button Grid.Column="6" x:Name="PlayButton" Content="▶" FontSize="24" Background="{StaticResource Accent}" Foreground="#102018" Click="PlayButton_Click" ToolTip="{DynamicResource PlayToolTip}" />
+            <Button Grid.Column="8" Content="■" FontSize="22" Foreground="#94D65C" ToolTip="{DynamicResource StopToolTip}" Click="StopButton_Click" />
+            <Button Grid.Column="10" x:Name="RecordButton" ToolTip="{DynamicResource RecordToolTip}" Click="RecordButton_Click">
               <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Ellipse x:Name="RecordStatusDot" Width="7" Height="7" Fill="White" VerticalAlignment="Center" />
-                <TextBlock Text="Запись" Margin="6,0" VerticalAlignment="Center" />
+                <TextBlock Text="{DynamicResource RecordButton}" Margin="6,0" VerticalAlignment="Center" />
                 <TextBlock x:Name="RecordStatusText" Text="0/3" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" />
               </StackPanel>
             </Button>

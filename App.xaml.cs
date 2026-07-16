@@ -14,6 +14,7 @@ public partial class App : System.Windows.Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        LocalizationManager.Initialize();
         if (e.Args.Contains("--record-song", StringComparer.OrdinalIgnoreCase))
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;

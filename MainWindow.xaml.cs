@@ -38,6 +38,8 @@ public partial class MainWindow : Window
     private readonly double[] _signalLevels = new double[SignalBarCount];
     private readonly DispatcherTimer _recordingIndicatorTimer = new();
     private readonly NotifyIcon _trayIcon = new();
+    private ToolStripMenuItem? _trayShowItem;
+    private ToolStripMenuItem? _trayExitItem;
     private readonly string _historyPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "history.json");
     private readonly string _playlistPath = Path.Combine(
@@ -68,10 +70,20 @@ public partial class MainWindow : Window
     private string? _lastArtworkQuery;
     private bool _hasStreamArtwork;
     private double _lastVolume = 0.3;
+    private string? _trackTextLocalizationKey;
+    private string? _statusLocalizationKey;
+    private string? _metaStatusLocalizationKey;
 
     public MainWindow()
     {
         InitializeComponent();
+        LocalizationManager.LanguageChanged += (_, _) =>
+        {
+            UpdateTrayLanguage();
+            RefreshLocalizedRuntimeText();
+            SetPlayerVolume(Player.Volume);
+            UpdateRecordingIndicator();
+        };
         LoadWindowIcon();
         InitializeTrayIcon();
         StateChanged += MainWindow_StateChanged;
@@ -203,6 +215,75 @@ public partial class MainWindow : Window
         _searchWindow.Show();
     }
 
+    private void RecordedTracksButton_Click(object sender, RoutedEventArgs e)
+    {
+        StopPlaybackFromSearch();
+        var window = new RecordedTracksWindow
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = Left,
+            Top = Top,
+            Width = ActualWidth,
+            Height = ActualHeight
+        };
+        Hide();
+        try
+        {
+            window.ShowDialog();
+        }
+        finally
+        {
+            Show();
+            Activate();
+        }
+    }
+
+    private void LanguageButton_Click(object sender, RoutedEventArgs e)
+    {
+        LocalizationManager.ToggleLanguage();
+    }
+
+    private static string L(string key) => LocalizationManager.Get(key);
+
+    private static string LF(string key, params object[] args) => LocalizationManager.Format(key, args);
+
+    private void SetTrackKey(string key)
+    {
+        _trackTextLocalizationKey = key;
+        TrackText.Text = L(key);
+    }
+
+    private void SetTrackText(string text)
+    {
+        _trackTextLocalizationKey = null;
+        TrackText.Text = text;
+    }
+
+    private void SetStatusKey(string key)
+    {
+        _statusLocalizationKey = key;
+        StatusText.Text = L(key);
+    }
+
+    private void SetMetaStatusKey(string key)
+    {
+        _metaStatusLocalizationKey = key;
+        MetaStatusText.Text = L(key);
+    }
+
+    private void SetMetaStatusText(string text)
+    {
+        _metaStatusLocalizationKey = null;
+        MetaStatusText.Text = text;
+    }
+
+    private void RefreshLocalizedRuntimeText()
+    {
+        if (_trackTextLocalizationKey is not null) TrackText.Text = L(_trackTextLocalizationKey);
+        if (_statusLocalizationKey is not null) StatusText.Text = L(_statusLocalizationKey);
+        if (_metaStatusLocalizationKey is not null) MetaStatusText.Text = L(_metaStatusLocalizationKey);
+    }
+
     internal void PreviewSearchStation(SearchStationItem station)
     {
         ApplySearchStation(station);
@@ -226,8 +307,8 @@ public partial class MainWindow : Window
         if (!_isPlaying) return;
         Player.Pause();
         _isPlaying = false;
-        PlayButton.Content = "▶  Слушать";
-        StatusText.Text = "ПАУЗА";
+        PlayButton.Content = "▶";
+        SetStatusKey("Paused");
         StopSignalAnalyzer();
         SaveAppState();
     }
@@ -238,10 +319,10 @@ public partial class MainWindow : Window
         StopMetadataReader();
         StopSignalAnalyzer();
         _isPlaying = false;
-        PlayButton.Content = "▶  Слушать";
-        StatusText.Text = "ОСТАНОВЛЕНО";
-        TrackText.Text = "Воспроизведение остановлено.";
-        MetaStatusText.Text = "Воспроизведение остановлено";
+        PlayButton.Content = "▶";
+        SetStatusKey("Stopped");
+        SetTrackKey("PlaybackStopped");
+        SetMetaStatusKey("PlaybackStoppedStatus");
         SaveAppState();
     }
 
@@ -255,11 +336,12 @@ public partial class MainWindow : Window
     private void ApplySearchStation(SearchStationItem station)
     {
         StreamUrlBox.Text = station.StreamUrl;
-        StationNameText.Text = string.IsNullOrWhiteSpace(station.Name) ? "Мой поток" : station.Name;
-        TrackText.Text = string.IsNullOrWhiteSpace(station.Description)
-            ? "Ссылка перенесена из поиска."
-            : station.Description;
-        UpdateMetadata(StationNameText.Text, TrackText.Text, station.StreamUrl, "Ссылка перенесена из поиска");
+        StationNameText.Text = string.IsNullOrWhiteSpace(station.Name) ? L("MyStream") : station.Name;
+        if (string.IsNullOrWhiteSpace(station.Description))
+            SetTrackKey("ImportedFromSearch");
+        else
+            SetTrackText(station.Description);
+        UpdateMetadata(StationNameText.Text, TrackText.Text, station.StreamUrl, "ImportedFromSearch");
     }
 
     private void AddHistoryItemToPlaylist_Click(object sender, RoutedEventArgs e)
@@ -295,9 +377,9 @@ public partial class MainWindow : Window
     private void SelectStation(RadioStation station)
     {
         StationNameText.Text = station.Name;
-        TrackText.Text = station.Description;
+        SetTrackText(station.Description);
         StreamUrlBox.Text = station.StreamUrl;
-        UpdateMetadata(station.Name, station.Description, station.StreamUrl, "Подключение к станции…");
+        UpdateMetadata(station.Name, station.Description, station.StreamUrl, "ConnectToStation");
         StartPlayback();
     }
 
@@ -307,8 +389,8 @@ public partial class MainWindow : Window
         {
             Player.Pause();
             _isPlaying = false;
-            PlayButton.Content = "▶  Слушать";
-            StatusText.Text = "ПАУЗА";
+            PlayButton.Content = "▶";
+            SetStatusKey("Paused");
             StopSignalAnalyzer();
             SaveAppState();
             return;
@@ -321,17 +403,17 @@ public partial class MainWindow : Window
         var value = StreamUrlBox.Text.Trim();
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {
-            StatusText.Text = "ПРОВЕРЬТЕ URL";
-            TrackText.Text = "Укажите корректную ссылку HTTP(S) на аудиопоток.";
+            SetStatusKey("CheckUrl");
+            SetTrackKey("InvalidUrl");
             return;
         }
 
-        if (StationsList.SelectedItem is null) StationNameText.Text = "Мой поток";
-        StatusText.Text = "ПОДКЛЮЧЕНИЕ…";
-        TrackText.Text = "Соединяемся с радиостанцией…";
+        if (StationsList.SelectedItem is null) StationNameText.Text = L("MyStream");
+        SetStatusKey("Connecting");
+        SetTrackKey("ConnectingToRadio");
         MetadataLogText.Clear();
-        AppendMetadata($"Подключение\n{value}");
-        UpdateMetadata(StationNameText.Text, MetaDescriptionText.Text == "—" ? "Пользовательский поток" : MetaDescriptionText.Text, value, "Подключение к станции…");
+        AppendMetadata($"{L("ConnectingLog")}\n{value}");
+        UpdateMetadata(StationNameText.Text, MetaDescriptionText.Text == "—" ? L("UserStream") : MetaDescriptionText.Text, value, "ConnectToStation");
         RegisterUrlHistory(StationNameText.Text, MetaDescriptionText.Text, value);
         _audioBuffer.Reset();
         _currentStreamUri = uri;
@@ -342,12 +424,13 @@ public partial class MainWindow : Window
         CancelPendingTrackUpdate();
         Player.Stop();
         ResetArtwork();
+        _ = LoadStationArtworkAsync(uri, _metadataCancellation?.Token ?? CancellationToken.None);
         Player.Source = uri;
         Player.Play();
         StartSignalAnalyzer(uri);
         StartMetadataReader(uri);
         _isPlaying = true;
-        PlayButton.Content = "Ⅱ  Пауза";
+        PlayButton.Content = "Ⅱ";
         SaveAppState();
     }
 
@@ -357,29 +440,29 @@ public partial class MainWindow : Window
         StopMetadataReader();
         StopSignalAnalyzer();
         _isPlaying = false;
-        PlayButton.Content = "▶  Слушать";
-        StatusText.Text = "ОСТАНОВЛЕНО";
-        TrackText.Text = "Воспроизведение остановлено.";
-        MetaStatusText.Text = "Воспроизведение остановлено";
+        PlayButton.Content = "▶";
+        SetStatusKey("Stopped");
+        SetTrackKey("PlaybackStopped");
+        SetMetaStatusKey("PlaybackStoppedStatus");
         SaveAppState();
     }
 
     private void Player_MediaOpened(object sender, RoutedEventArgs e)
     {
-        StatusText.Text = "В ЭФИРЕ";
+        SetStatusKey("OnAir");
         if (string.IsNullOrWhiteSpace(_currentTrackTitle))
-            TrackText.Text = "Поток воспроизводится.";
-        MetaStatusText.Text = "В эфире";
+            SetTrackKey("StreamPlaying");
+        SetMetaStatusKey("OnAirStatus");
         SaveCurrentStationToHistory();
     }
 
     private void Player_MediaFailed(object sender, ExceptionRoutedEventArgs e)
     {
         _isPlaying = false;
-        PlayButton.Content = "▶  Слушать";
-        StatusText.Text = "ОШИБКА";
-        TrackText.Text = "Не удалось открыть поток. Проверьте адрес или формат станции.";
-        MetaStatusText.Text = "Не удалось открыть поток";
+        PlayButton.Content = "▶";
+        SetStatusKey("PlaybackError");
+        SetTrackKey("PlaybackErrorText");
+        SetMetaStatusKey("PlaybackErrorStatus");
         StopMetadataReader();
         StopSignalAnalyzer();
         SaveAppState();
@@ -417,14 +500,20 @@ public partial class MainWindow : Window
         _trayIcon.Visible = false;
         _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(RestoreFromTray);
 
-        var showItem = new ToolStripMenuItem("Показать");
-        showItem.Click += (_, _) => Dispatcher.Invoke(RestoreFromTray);
-        var exitItem = new ToolStripMenuItem("Выход");
-        exitItem.Click += (_, _) => Dispatcher.Invoke(Close);
+        _trayShowItem = new ToolStripMenuItem(L("TrayShow"));
+        _trayShowItem.Click += (_, _) => Dispatcher.Invoke(RestoreFromTray);
+        _trayExitItem = new ToolStripMenuItem(L("TrayExit"));
+        _trayExitItem.Click += (_, _) => Dispatcher.Invoke(Close);
 
         _trayIcon.ContextMenuStrip = new System.Windows.Forms.ContextMenuStrip();
-        _trayIcon.ContextMenuStrip.Items.Add(showItem);
-        _trayIcon.ContextMenuStrip.Items.Add(exitItem);
+        _trayIcon.ContextMenuStrip.Items.Add(_trayShowItem);
+        _trayIcon.ContextMenuStrip.Items.Add(_trayExitItem);
+    }
+
+    private void UpdateTrayLanguage()
+    {
+        if (_trayShowItem is not null) _trayShowItem.Text = L("TrayShow");
+        if (_trayExitItem is not null) _trayExitItem.Text = L("TrayExit");
     }
 
     private void LoadWindowIcon()
@@ -467,7 +556,7 @@ public partial class MainWindow : Window
     {
         StreamUrlBox.Focus();
         StreamUrlBox.SelectAll();
-        TrackText.Text = "Вставьте ссылку на поток в нижнее поле и нажмите «Слушать».";
+        SetTrackKey("PasteUrlHint");
     }
 
     private void PasteReplacementUrl_Click(object sender, RoutedEventArgs e)
@@ -507,7 +596,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        VolumeSlider.Value = Math.Max(_lastVolume, 0.3) * 100;
+        VolumeSlider.Value = (_lastVolume > 0 ? _lastVolume : 0.3) * 100;
     }
 
     private void OpenSoundSettings_Click(object sender, RoutedEventArgs e)
@@ -564,15 +653,15 @@ public partial class MainWindow : Window
     {
         if (_currentStreamUri is null || (_currentStreamUri.Scheme != Uri.UriSchemeHttp && _currentStreamUri.Scheme != Uri.UriSchemeHttps))
         {
-            StatusText.Text = "ПРОВЕРЬТЕ URL";
-            MetaStatusText.Text = "Нужна ссылка HTTP(S) на MP3-поток";
+            SetStatusKey("CheckUrl");
+            SetMetaStatusKey("NeedHttpStream");
             return;
         }
 
         if (_currentStreamUri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
         {
-            StatusText.Text = "НЕ MP3";
-            MetaStatusText.Text = "HLS-плейлист нельзя сохранить как MP3 без перекодирования";
+            SetStatusKey("NotMp3");
+            SetMetaStatusKey("HlsCannotRecord");
             return;
         }
 
@@ -583,16 +672,16 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(recordingKey)
             && _songRecordings.Any(recording => !recording.IsCompleted && string.Equals(recording.TrackKey, recordingKey, StringComparison.OrdinalIgnoreCase)))
         {
-            StatusText.Text = "УЖЕ ПИШЕТСЯ";
-            MetaStatusText.Text = "Трек уже сохраняется";
-            _ = WindowsNotifier.ShowAsync("Трек уже сохраняется", BuildRecordingNotificationText());
+            SetStatusKey("AlreadyRecording");
+            SetMetaStatusKey("TrackAlreadyRecording");
+            _ = WindowsNotifier.ShowAsync(L("TrackAlreadyRecording"), BuildRecordingNotificationText());
             return;
         }
 
         if (_songRecordings.Count(recording => !recording.IsCompleted) >= MaxConcurrentSongRecordings)
         {
-            StatusText.Text = "ЛИМИТ";
-            MetaStatusText.Text = "Уже запущены 3 фоновые записи";
+            SetStatusKey("Limit");
+            SetMetaStatusKey("ThreeRecordingsLimit");
             return;
         }
 
@@ -615,8 +704,8 @@ public partial class MainWindow : Window
         if (process is null)
         {
             TryDeleteFile(seedPath);
-            StatusText.Text = "ОШИБКА";
-            MetaStatusText.Text = "Не удалось запустить фоновую запись";
+            SetStatusKey("PlaybackError");
+            SetMetaStatusKey("PlaybackErrorStatus");
             return;
         }
 
@@ -636,10 +725,10 @@ public partial class MainWindow : Window
             now - timerOffset));
         UpdateRecordingIndicator();
         SaveActiveRecordings();
-        StatusText.Text = "ЗАПИСЬ";
-        MetaStatusText.Text = $"Сохраняю песню: {Path.GetFileName(outputPath)}";
-        AppendMetadata($"СТАРТ ЗАПИСИ\n{recordingTitle}\n{Path.GetFileName(outputPath)}{(directUrlRecording ? "\nРежим: URL без метаданных, 5 минут" : string.Empty)}");
-        _ = WindowsNotifier.ShowAsync("Запись песни", recordingTitle);
+        SetStatusKey("Recording");
+        SetMetaStatusText(LF("SavingSongFile", Path.GetFileName(outputPath)));
+        AppendMetadata($"{L("StartRecordingLog")}\n{recordingTitle}\n{Path.GetFileName(outputPath)}{(directUrlRecording ? $"\n{L("DirectUrlMode")}" : string.Empty)}");
+        _ = WindowsNotifier.ShowAsync(L("SongRecordingNotification"), recordingTitle);
     }
 
     private Process? StartSongRecorder(Uri streamUri, string seedPath, string outputPath, string title, string? artworkUrl, bool directUrlRecording)
@@ -684,7 +773,7 @@ public partial class MainWindow : Window
         {
             MarkRecordingCompleted(recording);
             var duration = recording.ProcessDuration ?? DateTime.Now - recording.StartedAt;
-            AppendMetadata($"СТОП ЗАПИСИ\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}\nДлительность процесса: {duration:mm\\:ss}");
+            AppendMetadata($"{L("StopRecordingLog")}\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}\n{LF("ProcessDuration", duration.ToString(@"mm\:ss"))}");
         }
 
         if (completed.Count > 0)
@@ -761,9 +850,9 @@ public partial class MainWindow : Window
     {
         if (!TryGetRecordingFromTimerSlot(sender, out var recording)) return;
         StationNameText.Text = recording.Station;
-        TrackText.Text = recording.Title;
+        SetTrackText(recording.Title);
         StreamUrlBox.Text = recording.StreamUrl;
-        UpdateMetadata(recording.Station, recording.Description, recording.StreamUrl, "Переключение на канал записи…");
+        UpdateMetadata(recording.Station, recording.Description, recording.StreamUrl, "SwitchToRecordingChannel");
         StartPlayback();
     }
 
@@ -804,11 +893,11 @@ public partial class MainWindow : Window
         {
             TryDeleteFile(recording.OutputPath);
             _songRecordings.Remove(recording);
-            AppendMetadata($"ЗАПИСЬ УДАЛЕНА\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}");
+            AppendMetadata($"{L("RecordingDeletedLog")}\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}");
         }
         else
         {
-            AppendMetadata($"ЗАПИСЬ ОСТАНОВЛЕНА\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}");
+            AppendMetadata($"{L("RecordingStoppedLog")}\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}");
         }
 
         UpdateRecordingIndicator();
@@ -858,11 +947,11 @@ public partial class MainWindow : Window
     private string BuildRecordingToolTip()
     {
         if (_songRecordings.Count == 0)
-            return "Сохранить текущую песню из MP3-буфера";
+            return L("RecordingToolTipIdle");
 
         var lines = _songRecordings.Select(recording =>
             $"{recording.StartedAt:HH:mm:ss}  {recording.Station} — {recording.Title}");
-        return $"Сейчас сохраняется: {_songRecordings.Count}/{MaxConcurrentSongRecordings}\n" + string.Join("\n", lines);
+        return LF("RecordingToolTipActive", _songRecordings.Count, MaxConcurrentSongRecordings) + "\n" + string.Join("\n", lines);
     }
 
     private string BuildRecordingKey()
@@ -882,7 +971,7 @@ public partial class MainWindow : Window
     {
         var title = !string.IsNullOrWhiteSpace(_currentTrackTitle)
             ? _currentTrackTitle
-            : string.IsNullOrWhiteSpace(StationNameText.Text) || StationNameText.Text == "Выберите станцию"
+            : string.IsNullOrWhiteSpace(StationNameText.Text) || StationNameText.Text == L("SelectStation")
             ? "WebStream"
             : StationNameText.Text;
         var safeName = string.Join("_", title.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
@@ -902,13 +991,13 @@ public partial class MainWindow : Window
 
     private static string BuildUrlRecordingTitle(Uri streamUri)
     {
-        return string.IsNullOrWhiteSpace(streamUri.Host) ? "Поток без метаданных" : streamUri.Host;
+        return string.IsNullOrWhiteSpace(streamUri.Host) ? L("NoMetadataStreamTitle") : streamUri.Host;
     }
 
     private string BuildRecordingNotificationText()
     {
         if (!string.IsNullOrWhiteSpace(_currentTrackTitle)) return _currentTrackTitle;
-        if (!string.IsNullOrWhiteSpace(TrackText.Text) && TrackText.Text != "Поток воспроизводится.") return TrackText.Text;
+        if (!string.IsNullOrWhiteSpace(TrackText.Text) && TrackText.Text != L("StreamPlaying")) return TrackText.Text;
         return StationNameText.Text;
     }
 
@@ -936,7 +1025,7 @@ public partial class MainWindow : Window
         Player.Volume = volume;
         VolumeValueText.Text = Math.Round(volume * 100).ToString("0");
         VolumeIconText.Text = volume <= 0 ? "🔇" : "🔊";
-        MuteButton.Content = volume <= 0 ? "unmute" : "mute";
+        MuteButton.Content = volume <= 0 ? L("MuteOff") : L("MuteOn");
     }
 
     protected override void OnClosed(EventArgs e)
@@ -982,7 +1071,7 @@ public partial class MainWindow : Window
         var ffmpegPath = FindFfmpegPath();
         if (ffmpegPath is null)
         {
-            AppendMetadata("Уровень сигнала\nffmpeg.exe не найден");
+            AppendMetadata($"{L("SignalLevel")}\n{L("FfmpegNotFound")}");
             return;
         }
 
@@ -1234,11 +1323,11 @@ public partial class MainWindow : Window
         }
         catch (HttpRequestException)
         {
-            await Dispatcher.InvokeAsync(() => MetaStatusText.Text = "Эфир без ICY-метаданных");
+            await Dispatcher.InvokeAsync(() => SetMetaStatusKey("NoIcyMetadata"));
         }
         catch (EndOfStreamException)
         {
-            await Dispatcher.InvokeAsync(() => MetaStatusText.Text = "Поток метаданных завершён");
+            await Dispatcher.InvokeAsync(() => SetMetaStatusKey("MetadataStreamEnded"));
         }
     }
 
@@ -1266,7 +1355,7 @@ public partial class MainWindow : Window
                     var artwork = ExtractHlsArtworkUrl(metadataLine);
                     if (!string.IsNullOrWhiteSpace(artwork))
                         await Dispatcher.InvokeAsync(() => SetArtwork(artwork));
-                    await Dispatcher.InvokeAsync(() => MetaStatusText.Text = "В эфире · HLS-метаданные");
+                    await Dispatcher.InvokeAsync(() => SetMetaStatusKey("HlsMetadataOnAir"));
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(8), cancellationToken);
@@ -1278,7 +1367,7 @@ public partial class MainWindow : Window
         }
         catch (HttpRequestException)
         {
-            await Dispatcher.InvokeAsync(() => MetaStatusText.Text = "HLS-метаданные недоступны");
+            await Dispatcher.InvokeAsync(() => SetMetaStatusKey("HlsMetadataUnavailable"));
         }
     }
 
@@ -1432,8 +1521,8 @@ public partial class MainWindow : Window
             _currentTrackStartedAt = DateTime.Now;
         }
 
-        TrackText.Text = title;
-        MetaStatusText.Text = "В эфире · метаданные обновлены";
+        SetTrackText(title);
+        SetMetaStatusKey("MetadataUpdated");
         if (string.Equals(_lastArtworkQuery, title, StringComparison.Ordinal)) return;
         _lastArtworkQuery = title;
         _ = FindArtworkAsync(title, _metadataCancellation?.Token ?? CancellationToken.None);
@@ -1454,7 +1543,7 @@ public partial class MainWindow : Window
         _pendingTrackCancellation = new CancellationTokenSource();
         var token = _pendingTrackCancellation.Token;
         _ = ApplyDelayedTrackAsync(normalizedTitle, token);
-        MetaStatusText.Text = $"Новые метаданные · применю через {MetadataTrackDelay.TotalSeconds:0} сек";
+        SetMetaStatusText(LF("MetadataWillApply", MetadataTrackDelay.TotalSeconds.ToString("0")));
     }
 
     private async Task ApplyDelayedTrackAsync(string title, CancellationToken cancellationToken)
@@ -1551,6 +1640,149 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task LoadStationArtworkAsync(Uri streamUri, CancellationToken cancellationToken)
+    {
+        var candidates = BuildStationArtworkCandidates(streamUri).ToList();
+        candidates.InsertRange(0, await FindRadioBrowserStationArtworkAsync(streamUri, cancellationToken));
+        if (candidates.Count == 0) return;
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(streamUri.GetLeftPart(UriPartial.Authority)));
+        request.Headers.TryAddWithoutValidation("User-Agent", "WebStream/1.0");
+
+        try
+        {
+            using var response = await MetadataClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                var html = await response.Content.ReadAsStringAsync(cancellationToken);
+                candidates.InsertRange(0, ExtractIconLinks(html, response.RequestMessage?.RequestUri ?? streamUri));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (HttpRequestException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+
+        foreach (var candidate in candidates.DistinctBy(uri => uri.ToString(), StringComparer.OrdinalIgnoreCase))
+        {
+            if (cancellationToken.IsCancellationRequested
+                || _currentArtworkUrl is not null
+                || !Equals(_currentStreamUri, streamUri))
+                return;
+            if (!await IsReachableImageAsync(candidate, cancellationToken)) continue;
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (!cancellationToken.IsCancellationRequested
+                    && _currentArtworkUrl is null
+                    && Equals(_currentStreamUri, streamUri))
+                    SetArtwork(candidate.ToString(), isStreamArtwork: false);
+            });
+            return;
+        }
+    }
+
+    private static IEnumerable<Uri> BuildStationArtworkCandidates(Uri streamUri)
+    {
+        var root = new Uri(streamUri.GetLeftPart(UriPartial.Authority));
+        yield return new Uri(root, "/favicon.ico");
+        yield return new Uri(root, "/favicon.png");
+        yield return new Uri(root, "/apple-touch-icon.png");
+    }
+
+    private static async Task<List<Uri>> FindRadioBrowserStationArtworkAsync(Uri streamUri, CancellationToken cancellationToken)
+    {
+        var candidates = new List<Uri>();
+        try
+        {
+            var endpoint = $"https://de1.api.radio-browser.info/json/stations/byurl?url={Uri.EscapeDataString(streamUri.ToString())}";
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            request.Headers.TryAddWithoutValidation("User-Agent", "WebStream/1.0");
+            using var response = await MetadataClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+            if (!response.IsSuccessStatusCode) return candidates;
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            foreach (var station in document.RootElement.EnumerateArray())
+            {
+                AddCandidate(candidates, station, "favicon");
+                if (station.TryGetProperty("homepage", out var homepage)
+                    && Uri.TryCreate(homepage.GetString(), UriKind.Absolute, out var homepageUri))
+                    candidates.AddRange(BuildStationArtworkCandidates(homepageUri));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (HttpRequestException)
+        {
+        }
+        catch (JsonException)
+        {
+        }
+
+        return candidates;
+    }
+
+    private static void AddCandidate(List<Uri> candidates, JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property)) return;
+        if (Uri.TryCreate(property.GetString(), UriKind.Absolute, out var uri))
+            candidates.Add(uri);
+    }
+
+    private static IEnumerable<Uri> ExtractIconLinks(string html, Uri baseUri)
+    {
+        foreach (Match match in Regex.Matches(html, @"<link\b[^>]*>", RegexOptions.IgnoreCase))
+        {
+            var tag = match.Value;
+            var rel = ExtractHtmlAttribute(tag, "rel");
+            if (rel is null || !rel.Contains("icon", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var href = ExtractHtmlAttribute(tag, "href");
+            if (string.IsNullOrWhiteSpace(href)) continue;
+            if (Uri.TryCreate(baseUri, href, out var iconUri))
+                yield return iconUri;
+        }
+    }
+
+    private static string? ExtractHtmlAttribute(string tag, string attribute)
+    {
+        var match = Regex.Match(tag, $@"\b{Regex.Escape(attribute)}\s*=\s*[""'](?<value>[^""']+)[""']", RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups["value"].Value : null;
+    }
+
+    private static async Task<bool> IsReachableImageAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Head, uri);
+            request.Headers.TryAddWithoutValidation("User-Agent", "WebStream/1.0");
+            using var response = await MetadataClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            return response.IsSuccessStatusCode && IsImageContentType(response.Content.Headers.ContentType?.MediaType);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsImageContentType(string? mediaType)
+    {
+        return mediaType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
     private void SetArtwork(string coverUrl, bool isStreamArtwork = true)
     {
         if (!Uri.TryCreate(coverUrl, UriKind.Absolute, out var uri)) return;
@@ -1581,12 +1813,12 @@ public partial class MainWindow : Window
         ResetArtwork();
     }
 
-    private void UpdateMetadata(string station, string description, string streamUrl, string status)
+    private void UpdateMetadata(string station, string description, string streamUrl, string statusKey)
     {
         MetaStationText.Text = station;
         MetaDescriptionText.Text = description;
         MetaUrlText.Text = streamUrl;
-        MetaStatusText.Text = status;
+        SetMetaStatusKey(statusKey);
         ArtworkCaptionText.Text = station.ToUpperInvariant();
     }
 
@@ -1663,7 +1895,7 @@ public partial class MainWindow : Window
             StreamUrlBox.Text = state.StreamUrl;
             if (state.WasPlaying)
             {
-                StationNameText.Text = "Мой поток";
+                StationNameText.Text = L("MyStream");
                 StartPlayback();
             }
         }
@@ -1713,7 +1945,7 @@ public partial class MainWindow : Window
 
             if (_songRecordings.Count > 0)
             {
-                AppendMetadata($"ВОССТАНОВЛЕНЫ ЗАПИСИ\nАктивных процессов: {_songRecordings.Count}");
+                AppendMetadata($"{L("RestoredRecordings")}\n{LF("ActiveProcesses", _songRecordings.Count)}");
                 UpdateRecordingIndicator();
             }
             SaveActiveRecordings();

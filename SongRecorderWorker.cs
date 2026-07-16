@@ -21,6 +21,11 @@ public sealed class SongRecordingState(string targetTitle, bool hasSeenTargetTit
 public static class SongRecorderWorker
 {
     private static readonly HttpClient Client = new();
+    private static readonly TimeSpan SongChangeTailDuration = TimeSpan.FromSeconds(1.5);
+
+    private static string L(string key) => LocalizationManager.Get(key);
+
+    private static string LF(string key, params object[] args) => LocalizationManager.Format(key, args);
 
     public static bool TryParse(string[] args, out SongRecordingRequest request)
     {
@@ -91,7 +96,7 @@ public static class SongRecorderWorker
         var ffmpegPath = FindFfmpegPath();
         if (ffmpegPath is null)
         {
-            await WindowsNotifier.ShowAsync("Нужен ffmpeg.exe", "AAC-поток нельзя сохранить в MP3 без ffmpeg");
+            await WindowsNotifier.ShowAsync(L("FfmpegRequired"), L("AacNeedsFfmpeg"));
             return;
         }
 
@@ -111,9 +116,9 @@ public static class SongRecorderWorker
             await ffmpeg.WaitForExitAsync();
             var stderr = await stderrTask;
             if (ffmpeg.ExitCode != 0)
-                throw new IOException($"ffmpeg завершился с кодом {ffmpeg.ExitCode}: {stderr}");
+                throw new IOException(LF("FfmpegExitCode", ffmpeg.ExitCode, stderr));
 
-            await WindowsNotifier.ShowAsync("Песня сохранена", BuildSavedNotificationText(request));
+            await WindowsNotifier.ShowAsync(L("SongSaved"), BuildSavedNotificationText(request));
         }
         finally
         {
@@ -127,7 +132,7 @@ public static class SongRecorderWorker
         var ffmpegPath = FindFfmpegPath();
         if (ffmpegPath is null)
         {
-            await WindowsNotifier.ShowAsync("Нужен ffmpeg.exe", "Поток без метаданных записывается через ffmpeg");
+            await WindowsNotifier.ShowAsync(L("FfmpegRequired"), L("DirectUrlNeedsFfmpeg"));
             return;
         }
 
@@ -136,9 +141,9 @@ public static class SongRecorderWorker
         var stderr = await ffmpeg.StandardError.ReadToEndAsync();
         await ffmpeg.WaitForExitAsync();
         if (ffmpeg.ExitCode != 0)
-            throw new IOException($"ffmpeg завершился с кодом {ffmpeg.ExitCode}: {stderr}");
+            throw new IOException(LF("FfmpegExitCode", ffmpeg.ExitCode, stderr));
 
-        await WindowsNotifier.ShowAsync("Запись сохранена", BuildSavedNotificationText(request));
+        await WindowsNotifier.ShowAsync(L("RecordingSaved"), BuildSavedNotificationText(request));
     }
 
     private static async Task<string?> DownloadArtworkForFfmpegAsync(SongRecordingRequest request)
@@ -215,7 +220,7 @@ public static class SongRecorderWorker
         startInfo.ArgumentList.Add("-id3v2_version");
         startInfo.ArgumentList.Add("3");
         startInfo.ArgumentList.Add(outputPath);
-        return Process.Start(startInfo) ?? throw new IOException("Не удалось запустить ffmpeg.exe");
+        return Process.Start(startInfo) ?? throw new IOException(L("CouldNotStartFfmpeg"));
     }
 
     private static Process StartFfmpegFromUrl(string ffmpegPath, Uri streamUri, string outputPath, string title, TimeSpan duration)
@@ -248,7 +253,7 @@ public static class SongRecorderWorker
         startInfo.ArgumentList.Add("-id3v2_version");
         startInfo.ArgumentList.Add("3");
         startInfo.ArgumentList.Add(outputPath);
-        return Process.Start(startInfo) ?? throw new IOException("Не удалось запустить ffmpeg.exe");
+        return Process.Start(startInfo) ?? throw new IOException(L("CouldNotStartFfmpeg"));
     }
 
     private static (string Artist, string Title) SplitTitleForMetadata(string title)
@@ -282,17 +287,18 @@ public static class SongRecorderWorker
         try
         {
             await EmbedArtworkAsync(request);
-            await WindowsNotifier.ShowAsync("Песня сохранена", BuildSavedNotificationText(request));
+            await WindowsNotifier.ShowAsync(L("SongSaved"), BuildSavedNotificationText(request));
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException)
         {
-            await WindowsNotifier.ShowAsync("Песня сохранена", $"{BuildSavedNotificationText(request)}\nОбложка не встроена");
+            await WindowsNotifier.ShowAsync(L("SongSaved"), $"{BuildSavedNotificationText(request)}\n{L("ArtworkNotEmbedded")}");
         }
     }
 
     private static async Task AppendUntilSongChangesAsync(Uri streamUri, Stream output, string initialTitle)
     {
-        var state = new SongRecordingState(BuildSongCompareKey(initialTitle), string.IsNullOrWhiteSpace(BuildSongCompareKey(initialTitle)));
+        var initialKey = BuildSongCompareKey(initialTitle);
+        var state = new SongRecordingState(initialKey, !string.IsNullOrWhiteSpace(initialKey));
         var startedAt = DateTime.UtcNow;
         var minimumRecordingDuration = TimeSpan.FromSeconds(60);
         var maximumRecordingDuration = TimeSpan.FromMinutes(20);
@@ -349,6 +355,11 @@ public static class SongRecorderWorker
 
         while (true)
         {
+            if (state.HasSeenTargetTitle
+                && !string.IsNullOrWhiteSpace(state.PendingNextTitle)
+                && DateTime.UtcNow - state.PendingNextTitleSince >= SongChangeTailDuration)
+                return true;
+
             if (DateTime.UtcNow - startedAt >= minimumRecordingDuration
                 && DateTime.UtcNow - state.LastMetadataAt >= metadataSilenceTimeout)
                 return true;
@@ -384,10 +395,7 @@ public static class SongRecorderWorker
                 continue;
             }
 
-            if (IsConfidentSongChange(state.TargetTitle, songKey))
-                return true;
-
-            if (!state.HasSeenTargetTitle || DateTime.UtcNow - startedAt < minimumRecordingDuration)
+            if (!state.HasSeenTargetTitle)
                 continue;
 
             if (!string.Equals(songKey, state.PendingNextTitle, StringComparison.OrdinalIgnoreCase))
@@ -395,11 +403,11 @@ public static class SongRecorderWorker
                 state.PendingNextTitle = songKey;
                 state.PendingNextTitleSince = DateTime.UtcNow;
                 state.PendingNextTitleHits = 1;
-                continue;
+                return true;
             }
 
             state.PendingNextTitleHits++;
-            if (state.PendingNextTitleHits >= 3 && DateTime.UtcNow - state.PendingNextTitleSince >= TimeSpan.FromSeconds(30))
+            if (state.PendingNextTitleHits >= 2 && DateTime.UtcNow - state.PendingNextTitleSince >= SongChangeTailDuration)
                 return true;
         }
     }
@@ -483,18 +491,6 @@ public static class SongRecorderWorker
         normalized = Regex.Replace(normalized, @"\s*\[(OFFICIAL|RADIO|LIVE|HD|HQ|STEREO|MONO|REMIX|VERSION|EDIT|VIDEO)[^\]]*\]", "", RegexOptions.IgnoreCase);
         normalized = Regex.Replace(normalized, @"[^\p{L}\p{N}]+", " ");
         return Regex.Replace(normalized, @"\s+", " ").Trim();
-    }
-
-    private static bool IsConfidentSongChange(string currentKey, string nextKey)
-    {
-        if (string.IsNullOrWhiteSpace(currentKey) || string.IsNullOrWhiteSpace(nextKey)) return false;
-        if (string.Equals(currentKey, nextKey, StringComparison.OrdinalIgnoreCase)) return false;
-        return CountWords(currentKey) >= 3 && CountWords(nextKey) >= 3;
-    }
-
-    private static int CountWords(string value)
-    {
-        return value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
     }
 
     private static bool LooksLikeMp3Bytes(byte[] bytes)

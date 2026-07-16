@@ -23,10 +23,22 @@ public partial class StationSearchWindow : Window
     {
         _mainWindow = mainWindow;
         InitializeComponent();
+        LocalizationManager.LanguageChanged += LocalizationManager_LanguageChanged;
         StationsListBox.ItemsSource = _stations;
         PreviewVolumeSlider.Value = _mainWindow.CurrentPlaybackVolumePercent;
         LoadSearchState();
         SearchTextBox.Focus();
+    }
+
+    private static string L(string key) => LocalizationManager.Get(key);
+
+    private static string LF(string key, params object[] args) => LocalizationManager.Format(key, args);
+
+    private void LocalizationManager_LanguageChanged(object? sender, EventArgs e)
+    {
+        UpdatePreviewMuteButton();
+        if (_stations.Count == 0)
+            SearchStatusText.Text = L("SearchPrompt");
     }
 
     private async void SearchButton_Click(object sender, RoutedEventArgs e)
@@ -48,7 +60,7 @@ public partial class StationSearchWindow : Window
 
         _stations.Clear();
         SelectedUrlTextBox.Clear();
-        SearchStatusText.Text = "Ищу станции...";
+        SearchStatusText.Text = L("SearchLooking");
         SearchStatusText.Visibility = Visibility.Visible;
         SearchButton.IsEnabled = false;
 
@@ -60,18 +72,18 @@ public partial class StationSearchWindow : Window
 
             SaveSearchState();
             SearchStatusText.Text = _stations.Count == 0
-                ? "Ничего не найдено"
+                ? L("SearchNothingFound")
                 : string.Empty;
             SearchStatusText.Visibility = _stations.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
         catch (HttpRequestException)
         {
-            SearchStatusText.Text = "Не удалось подключиться к каталогу радиостанций";
+            SearchStatusText.Text = L("SearchConnectionError");
             SearchStatusText.Visibility = Visibility.Visible;
         }
         catch (JsonException)
         {
-            SearchStatusText.Text = "Каталог вернул неожиданный ответ";
+            SearchStatusText.Text = L("SearchBadResponse");
             SearchStatusText.Visibility = Visibility.Visible;
         }
         finally
@@ -147,7 +159,7 @@ public partial class StationSearchWindow : Window
             return;
 
         _mainWindow.PreviewSearchStation(station);
-        SearchStatusText.Text = $"Слушаю: {station.Name}";
+        SearchStatusText.Text = LF("SearchListening", station.Name);
         SearchStatusText.Visibility = Visibility.Visible;
     }
 
@@ -166,7 +178,7 @@ public partial class StationSearchWindow : Window
         if (!IsLoaded) return;
         var volume = Math.Clamp(e.NewValue / 100, 0, 1);
         _mainWindow.SetSearchPlaybackVolume(e.NewValue);
-        PreviewMuteButton.Content = volume <= 0 ? "unmute" : "mute";
+        UpdatePreviewMuteButton();
         if (volume > 0) _lastPreviewVolume = volume;
     }
 
@@ -188,20 +200,14 @@ public partial class StationSearchWindow : Window
 
         var added = _mainWindow.AddSearchStationToPlaylist(station);
         SearchStatusText.Text = added
-            ? $"Добавлено в плейлист: {station.Name}"
-            : $"Уже есть в плейлисте: {station.Name}";
+            ? LF("SearchAdded", station.Name)
+            : LF("SearchAlreadyInPlaylist", station.Name);
         SearchStatusText.Visibility = Visibility.Visible;
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e)
     {
         Close();
-    }
-
-    protected override void OnClosed(EventArgs e)
-    {
-        SaveSearchState();
-        base.OnClosed(e);
     }
 
     private void LoadSearchState()
@@ -222,7 +228,7 @@ public partial class StationSearchWindow : Window
             foreach (var station in stations.Where(station => !string.IsNullOrWhiteSpace(station.StreamUrl)))
                 _stations.Add(station);
 
-            SearchStatusText.Text = _stations.Count == 0 ? "Введите запрос и нажмите Поиск" : string.Empty;
+            SearchStatusText.Text = _stations.Count == 0 ? L("SearchPrompt") : string.Empty;
             SearchStatusText.Visibility = _stations.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
         catch (IOException)
@@ -259,6 +265,18 @@ public partial class StationSearchWindow : Window
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    private void UpdatePreviewMuteButton()
+    {
+        PreviewMuteButton.Content = PreviewVolumeSlider.Value <= 0 ? L("MuteOff") : L("MuteOn");
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        LocalizationManager.LanguageChanged -= LocalizationManager_LanguageChanged;
+        SaveSearchState();
+        base.OnClosed(e);
     }
 
     private static Dictionary<string, string> ReadIniValues(IEnumerable<string> lines)
@@ -312,7 +330,7 @@ public sealed record SearchStationItem(
 
         return new SearchStationItem(
             string.IsNullOrWhiteSpace(station.StationUuid) ? streamUrl : station.StationUuid,
-            string.IsNullOrWhiteSpace(station.Name) ? "Без названия" : station.Name,
+            string.IsNullOrWhiteSpace(station.Name) ? LocalizationManager.Get("Untitled") : station.Name,
             streamUrl,
             description,
             details,

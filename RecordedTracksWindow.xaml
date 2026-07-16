@@ -1,0 +1,181 @@
+<Window x:Class="WebStream.RecordedTracksWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{DynamicResource RecordedWindowTitle}" Height="560" Width="920" MinHeight="500" MinWidth="760"
+        Background="{StaticResource Surface}" Foreground="White" WindowStartupLocation="CenterOwner">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="14" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="320" />
+        <ColumnDefinition Width="16" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+
+      <Border Background="{StaticResource Panel}" CornerRadius="10" Padding="12">
+        <DockPanel>
+          <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="8" />
+              <ColumnDefinition Width="96" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="{DynamicResource RecordedFiles}" Foreground="{StaticResource Accent}" FontWeight="Bold" VerticalAlignment="Center" />
+            <Button Grid.Column="2" Content="{DynamicResource Refresh}" Padding="8,6" Click="RefreshButton_Click" />
+          </Grid>
+          <ListBox x:Name="TracksList" Background="#15171C" BorderBrush="#343B46" Foreground="White"
+                   ScrollViewer.VerticalScrollBarVisibility="Auto" SelectionChanged="TracksList_SelectionChanged">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <StackPanel Margin="4">
+                  <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="White" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding IsEdited}" Value="True">
+                            <Setter Property="Foreground" Value="#FFD95A" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
+                  <TextBlock Text="{Binding Info}" FontSize="11" Margin="0,3,0,0">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding IsEdited}" Value="True">
+                            <Setter Property="Foreground" Value="#FFD95A" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <Border Grid.Column="2" Background="{StaticResource Panel}" CornerRadius="10" Padding="16,12">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="8" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="8" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="14" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+
+          <Border Height="58" ClipToBounds="True">
+            <TextBlock x:Name="CurrentFileText" Text="{DynamicResource SelectRecording}" FontSize="22" FontWeight="Bold"
+                       LineHeight="27" LineStackingStrategy="BlockLineHeight" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+          </Border>
+
+          <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="10" />
+              <ColumnDefinition Width="130" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="FileNameBox" Padding="8,5" MinHeight="28" ToolTip="{DynamicResource FileName}" />
+            <Button Grid.Column="2" Padding="12,7" Content="{DynamicResource RenameFile}" Click="RenameFileButton_Click" />
+          </Grid>
+
+          <Border Grid.Row="4" Background="#15171C" BorderBrush="#343B46" BorderThickness="1" Padding="12">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="6" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="4" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="4" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="4" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="4" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="4" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="4" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="4" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="8" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <TextBlock Text="{DynamicResource Id3Editor}" Foreground="{StaticResource Accent}" FontWeight="Bold" />
+              <TextBlock Grid.Row="2" Text="{DynamicResource Id3Title}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" />
+              <TextBox x:Name="TitleBox" Grid.Row="4" Padding="8,5" MinHeight="28" ToolTip="{DynamicResource Id3Title}" />
+              <TextBlock Grid.Row="6" Text="{DynamicResource Id3Artist}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" />
+              <TextBox x:Name="ArtistBox" Grid.Row="8" Padding="8,5" MinHeight="28" ToolTip="{DynamicResource Id3Artist}" />
+              <TextBlock Grid.Row="10" Text="{DynamicResource Id3Album}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" />
+              <TextBox x:Name="AlbumBox" Grid.Row="12" Padding="8,5" MinHeight="28" ToolTip="{DynamicResource Id3Album}" />
+              <TextBlock Grid.Row="14" Text="{DynamicResource Id3Genre}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" />
+              <TextBox x:Name="GenreBox" Grid.Row="16" Padding="8,5" MinHeight="28" ToolTip="{DynamicResource Id3Genre}" />
+              <Button Grid.Row="18" Padding="12,7" Content="{DynamicResource SaveTags}" Click="SaveTagsButton_Click" />
+            </Grid>
+          </Border>
+
+          <TextBlock Grid.Row="7" x:Name="StatusText" Text="" Foreground="{StaticResource Muted}" TextWrapping="Wrap" />
+        </Grid>
+      </Border>
+    </Grid>
+
+    <Border Grid.Row="2" Background="{StaticResource Panel}" CornerRadius="10" Padding="14">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="10" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+          <Canvas x:Name="TrimRangeCanvas" Height="24" VerticalAlignment="Center" IsHitTestVisible="False">
+            <Border x:Name="TrimRangeFill" Height="4" Canvas.Top="10" Background="{StaticResource Accent}" CornerRadius="2" Opacity="0.85" Visibility="Collapsed" />
+          </Canvas>
+          <Slider x:Name="PositionSlider" Minimum="0" Maximum="1" SmallChange="0.1" LargeChange="1"
+                  PreviewMouseWheel="PositionSlider_PreviewMouseWheel" SizeChanged="PositionSlider_SizeChanged"
+                  ValueChanged="PositionSlider_ValueChanged" />
+        </Grid>
+
+        <Grid Grid.Row="2">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="72" />
+            <ColumnDefinition Width="10" />
+            <ColumnDefinition Width="72" />
+            <ColumnDefinition Width="10" />
+            <ColumnDefinition Width="130" />
+            <ColumnDefinition Width="10" />
+            <ColumnDefinition Width="130" />
+            <ColumnDefinition Width="10" />
+            <ColumnDefinition Width="150" />
+            <ColumnDefinition Width="12" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="170" />
+          </Grid.ColumnDefinitions>
+          <Button x:Name="PlayPauseButton" Content="▶" FontSize="20" Background="{StaticResource Accent}" Foreground="#102018" Click="PlayPauseButton_Click" />
+          <Button Grid.Column="2" Content="■" FontSize="20" Foreground="#94D65C" Click="StopButton_Click" />
+          <Button x:Name="TrimStartButton" Grid.Column="4" Content="{DynamicResource TrimStart}" PreviewMouseWheel="TrimMarkerButton_PreviewMouseWheel" Click="TrimStartButton_Click" />
+          <Button x:Name="TrimEndButton" Grid.Column="6" Content="{DynamicResource TrimEnd}" PreviewMouseWheel="TrimMarkerButton_PreviewMouseWheel" Click="TrimEndButton_Click" />
+          <Button Grid.Column="8" Content="{DynamicResource ApplyTrim}" Click="ApplyTrimButton_Click" />
+          <TextBlock x:Name="PositionText" Grid.Column="11" Text="00:00:00" Foreground="{StaticResource Muted}" VerticalAlignment="Center" HorizontalAlignment="Right" />
+        </Grid>
+      </Grid>
+    </Border>
+
+    <MediaElement x:Name="TrackPlayer" LoadedBehavior="Manual" UnloadedBehavior="Stop" Visibility="Collapsed"
+                  MediaOpened="TrackPlayer_MediaOpened" MediaEnded="TrackPlayer_MediaEnded" />
+  </Grid>
+</Window>

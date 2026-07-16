@@ -5,6 +5,9 @@ namespace WebStream;
 
 public static class Id3TagWriter
 {
+    private const string EditedMarkerDescription = "WebStreamEdited";
+    private const string EditedMarkerValue = "1";
+
     public static async Task WriteAsync(string mp3Path, string title, byte[] artworkBytes, string mimeType)
     {
         if (artworkBytes.Length == 0 || !File.Exists(mp3Path)) return;
@@ -15,6 +18,30 @@ public static class Id3TagWriter
         var tag = BuildTag(frames);
         var tempPath = $"{mp3Path}.tagtmp";
 
+        await using (var output = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true))
+        {
+            await output.WriteAsync(tag);
+            await output.WriteAsync(original.AsMemory(audioStart));
+        }
+
+        File.Copy(tempPath, mp3Path, overwrite: true);
+        File.Delete(tempPath);
+    }
+
+    public static async Task MarkEditedAsync(string mp3Path)
+    {
+        if (!File.Exists(mp3Path) || Id3TagReader.Read(mp3Path).IsEdited) return;
+
+        var original = await File.ReadAllBytesAsync(mp3Path);
+        var audioStart = GetAudioStart(original);
+        var existingFrames = TrimPadding(audioStart > 10 ? original[10..audioStart] : []);
+
+        using var frames = new MemoryStream();
+        frames.Write(existingFrames);
+        WriteUrlFrame(frames, EditedMarkerDescription, EditedMarkerValue);
+
+        var tag = BuildTag(frames.ToArray());
+        var tempPath = $"{mp3Path}.marktmp";
         await using (var output = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true))
         {
             await output.WriteAsync(tag);
@@ -74,12 +101,30 @@ public static class Id3TagWriter
         WriteFrame(output, "APIC", content.ToArray());
     }
 
+    private static void WriteUrlFrame(Stream output, string description, string url)
+    {
+        using var content = new MemoryStream();
+        content.WriteByte(0);
+        content.Write(Encoding.Latin1.GetBytes(description));
+        content.WriteByte(0);
+        content.Write(Encoding.Latin1.GetBytes(url));
+        WriteFrame(output, "WXXX", content.ToArray());
+    }
+
     private static void WriteFrame(Stream output, string id, byte[] content)
     {
         output.Write(Encoding.ASCII.GetBytes(id));
         output.Write(ToBigEndian(content.Length));
         output.Write(new byte[] { 0, 0 });
         output.Write(content);
+    }
+
+    private static byte[] TrimPadding(byte[] frames)
+    {
+        var end = frames.Length;
+        while (end > 0 && frames[end - 1] == 0)
+            end--;
+        return end == frames.Length ? frames : frames[..end];
     }
 
     private static int GetAudioStart(byte[] data)
