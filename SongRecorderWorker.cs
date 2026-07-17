@@ -118,6 +118,7 @@ public static class SongRecorderWorker
             if (ffmpeg.ExitCode != 0)
                 throw new IOException(LF("FfmpegExitCode", ffmpeg.ExitCode, stderr));
 
+            await AutoFillMissingTagsAsync(request);
             await WindowsNotifier.ShowAsync(L("SongSaved"), BuildSavedNotificationText(request));
         }
         finally
@@ -143,6 +144,7 @@ public static class SongRecorderWorker
         if (ffmpeg.ExitCode != 0)
             throw new IOException(LF("FfmpegExitCode", ffmpeg.ExitCode, stderr));
 
+        await AutoFillMissingTagsAsync(request);
         await WindowsNotifier.ShowAsync(L("RecordingSaved"), BuildSavedNotificationText(request));
     }
 
@@ -287,12 +289,36 @@ public static class SongRecorderWorker
         try
         {
             await EmbedArtworkAsync(request);
+            await AutoFillMissingTagsAsync(request);
             await WindowsNotifier.ShowAsync(L("SongSaved"), BuildSavedNotificationText(request));
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException)
         {
+            await TryAutoFillMissingTagsAsync(request);
             await WindowsNotifier.ShowAsync(L("SongSaved"), $"{BuildSavedNotificationText(request)}\n{L("ArtworkNotEmbedded")}");
         }
+    }
+
+    private static async Task TryAutoFillMissingTagsAsync(SongRecordingRequest request)
+    {
+        try
+        {
+            await AutoFillMissingTagsAsync(request);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or TaskCanceledException)
+        {
+        }
+    }
+
+    private static async Task AutoFillMissingTagsAsync(SongRecordingRequest request)
+    {
+        var current = Id3TagReader.Read(request.OutputPath);
+        var (artistFromTitle, titleFromTitle) = SplitTitleForMetadata(request.InitialTitle);
+        var title = string.IsNullOrWhiteSpace(current.Title) ? titleFromTitle : current.Title;
+        var artist = string.IsNullOrWhiteSpace(current.Artist) ? artistFromTitle : current.Artist;
+        var suggestion = await MetadataLookupService.FindAsync(title, artist, Path.GetFileNameWithoutExtension(request.OutputPath));
+        if (suggestion is null) return;
+        await Id3TagWriter.WriteMissingTextTagsAsync(request.OutputPath, suggestion);
     }
 
     private static async Task AppendUntilSongChangesAsync(Uri streamUri, Stream output, string initialTitle)
@@ -472,7 +498,12 @@ public static class SongRecorderWorker
             var start = metadata.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
             if (start < 0) continue;
             start += prefix.Length;
-            var end = metadata.IndexOf(quote, start);
+            var terminator = $"{quote};";
+            var end = metadata.IndexOf(terminator, start, StringComparison.Ordinal);
+            if (end < 0)
+                end = metadata.IndexOf(";StreamTitle=", start, StringComparison.OrdinalIgnoreCase);
+            if (end < 0)
+                end = metadata.IndexOf(quote, start);
             return (end < 0 ? metadata[start..] : metadata[start..end]).Trim('\0', ' ');
         }
         return null;

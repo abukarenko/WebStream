@@ -29,7 +29,9 @@
             <Button Grid.Column="2" Content="{DynamicResource Refresh}" Padding="8,6" Click="RefreshButton_Click" />
           </Grid>
           <ListBox x:Name="TracksList" Background="#15171C" BorderBrush="#343B46" Foreground="White"
-                   ScrollViewer.VerticalScrollBarVisibility="Auto" SelectionChanged="TracksList_SelectionChanged">
+                   ScrollViewer.VerticalScrollBarVisibility="Auto"
+                   PreviewMouseLeftButtonDown="TracksList_PreviewMouseLeftButtonDown"
+                   PreviewMouseWheel="TracksList_PreviewMouseWheel">
             <ListBox.ItemTemplate>
               <DataTemplate>
                 <StackPanel Margin="4">
@@ -124,7 +126,15 @@
               <TextBox x:Name="AlbumBox" Grid.Row="12" Padding="8,5" MinHeight="28" ToolTip="{DynamicResource Id3Album}" />
               <TextBlock Grid.Row="14" Text="{DynamicResource Id3Genre}" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" />
               <TextBox x:Name="GenreBox" Grid.Row="16" Padding="8,5" MinHeight="28" ToolTip="{DynamicResource Id3Genre}" />
-              <Button Grid.Row="18" Padding="12,7" Content="{DynamicResource SaveTags}" Click="SaveTagsButton_Click" />
+              <Grid Grid.Row="18">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="8" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button Padding="12,7" Content="{DynamicResource AutoFillTags}" Click="AutoFillTagsButton_Click" />
+                <Button Grid.Column="2" Padding="12,7" Content="{DynamicResource SaveTags}" Click="SaveTagsButton_Click" />
+              </Grid>
             </Grid>
           </Border>
 
@@ -176,6 +186,6 @@
     </Border>
 
     <MediaElement x:Name="TrackPlayer" LoadedBehavior="Manual" UnloadedBehavior="Stop" Visibility="Collapsed"
-                  MediaOpened="TrackPlayer_MediaOpened" MediaEnded="TrackPlayer_MediaEnded" />
+                  MediaOpened="TrackPlayer_MediaOpened" MediaEnded="TrackPlayer_MediaEnded" MediaFailed="TrackPlayer_MediaFailed" />
   </Grid>
 </Window>

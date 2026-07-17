@@ -2,10 +2,13 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace WebStream;
@@ -28,6 +31,7 @@ public partial class RecordedTracksWindow : Window
     private double? _trimStartSeconds;
     private double? _trimEndSeconds;
     private TrimMarker _activeTrimMarker = TrimMarker.None;
+    private string? _playbackTempPath;
 
     public RecordedTracksWindow()
     {
@@ -49,6 +53,14 @@ public partial class RecordedTracksWindow : Window
 
     private void RefreshButton_Click(object sender, RoutedEventArgs e) => LoadTracks();
 
+    protected override void OnClosed(EventArgs e)
+    {
+        TrackPlayer.Stop();
+        TrackPlayer.Source = null;
+        TryDeletePlaybackTemp();
+        base.OnClosed(e);
+    }
+
     private void LoadTracks()
     {
         _tracks.Clear();
@@ -60,7 +72,37 @@ public partial class RecordedTracksWindow : Window
         StatusText.Text = LF("RecordedLoaded", _tracks.Count);
     }
 
-    private void TracksList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void TracksList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var item = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+        if (item is null) return;
+
+        e.Handled = true;
+        if (e.ClickCount < 2) return;
+
+        TracksList.SelectedItem = item.DataContext;
+        LoadSelectedTrack();
+        StartTrackPlayback();
+    }
+
+    private void TracksList_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        var scrollViewer = FindVisualChild<ScrollViewer>(TracksList);
+        if (scrollViewer is null) return;
+
+        var steps = Math.Max(1, Math.Abs(e.Delta) / 120);
+        for (var i = 0; i < steps; i++)
+        {
+            if (e.Delta > 0)
+                scrollViewer.LineUp();
+            else
+                scrollViewer.LineDown();
+        }
+
+        e.Handled = true;
+    }
+
+    private void LoadSelectedTrack()
     {
         StopPlayback();
         if (SelectedTrack is not { } track)
@@ -73,7 +115,7 @@ public partial class RecordedTracksWindow : Window
         CurrentFileText.Text = track.DisplayName;
         FileNameBox.Text = Path.GetFileName(track.Path);
         LoadTags(track.Path);
-        TrackPlayer.Source = new Uri(track.Path);
+        SetTrackPlayerSource(track.Path);
         _duration = TimeSpan.Zero;
         PositionSlider.Maximum = 1;
         PositionSlider.Value = 0;
@@ -93,6 +135,12 @@ public partial class RecordedTracksWindow : Window
             return;
         }
 
+        StartTrackPlayback();
+    }
+
+    private void StartTrackPlayback()
+    {
+        if (SelectedTrack is null) return;
         TrackPlayer.Play();
         _isPlaying = true;
         PlayPauseButton.Content = "Ⅱ";
@@ -131,6 +179,34 @@ public partial class RecordedTracksWindow : Window
         PlayPauseButton.Content = "▶";
         PositionSlider.Value = PositionSlider.Maximum;
         UpdatePositionText(PositionSlider.Maximum);
+    }
+
+    private void TrackPlayer_MediaFailed(object sender, ExceptionRoutedEventArgs e)
+    {
+        _positionTimer.Stop();
+        _isPlaying = false;
+        PlayPauseButton.Content = "▶";
+        StatusText.Text = LF("PlaybackFileError", e.ErrorException.Message);
+    }
+
+    private void SetTrackPlayerSource(string path)
+    {
+        TrackPlayer.Stop();
+        TrackPlayer.Source = null;
+        TryDeletePlaybackTemp();
+
+        var playbackFolder = Path.Combine(Path.GetTempPath(), "WebStreamPlayback");
+        Directory.CreateDirectory(playbackFolder);
+        _playbackTempPath = Path.Combine(playbackFolder, $"playback_{Guid.NewGuid():N}.mp3");
+        File.Copy(path, _playbackTempPath, overwrite: true);
+        TrackPlayer.Source = new Uri(_playbackTempPath, UriKind.Absolute);
+    }
+
+    private void TryDeletePlaybackTemp()
+    {
+        if (string.IsNullOrWhiteSpace(_playbackTempPath)) return;
+        TryDelete(_playbackTempPath);
+        _playbackTempPath = null;
     }
 
     private void PositionSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -237,6 +313,69 @@ public partial class RecordedTracksWindow : Window
         }
     }
 
+    private async void AutoFillTagsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedTrack is not { } track) return;
+        StatusText.Text = L("TagsAutoFillLooking");
+
+        try
+        {
+            var suggestion = await MetadataLookupService.FindAsync(
+                TitleBox.Text,
+                ArtistBox.Text,
+                Path.GetFileNameWithoutExtension(track.Path));
+            if (suggestion is null)
+            {
+                StatusText.Text = L("TagsAutoFillNotFound");
+                return;
+            }
+
+            var changed = FillIfEmpty(TitleBox, suggestion.Title) |
+                          FillIfEmpty(ArtistBox, suggestion.Artist) |
+                          FillIfEmpty(AlbumBox, suggestion.Album) |
+                          FillIfEmpty(GenreBox, suggestion.Genre);
+            StatusText.Text = changed
+                ? L("TagsAutoFilled")
+                : L("TagsAutoFillNoEmptyFields");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            StatusText.Text = LF("TagsAutoFillError", ex.Message);
+        }
+    }
+
+    private static bool FillIfEmpty(System.Windows.Controls.TextBox box, string value)
+    {
+        if (!string.IsNullOrWhiteSpace(box.Text) || string.IsNullOrWhiteSpace(value))
+            return false;
+        box.Text = value.Trim();
+        return true;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? element) where T : DependencyObject
+    {
+        while (element is not null)
+        {
+            if (element is T match) return match;
+            element = VisualTreeHelper.GetParent(element);
+        }
+
+        return null;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T match) return match;
+            var nested = FindVisualChild<T>(child);
+            if (nested is not null) return nested;
+        }
+
+        return null;
+    }
+
     private async void ApplyTrimButton_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedTrack is not { } track) return;
@@ -271,7 +410,7 @@ public partial class RecordedTracksWindow : Window
             await Id3TagWriter.MarkEditedAsync(track.Path);
             track.MarkEdited();
             track.Refresh();
-            TrackPlayer.Source = new Uri(track.Path);
+            SetTrackPlayerSource(track.Path);
             StatusText.Text = L("TrimSaved");
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException)
@@ -315,7 +454,7 @@ public partial class RecordedTracksWindow : Window
             track.Refresh();
             CurrentFileText.Text = track.DisplayName;
             FileNameBox.Text = Path.GetFileName(track.Path);
-            TrackPlayer.Source = new Uri(track.Path);
+            SetTrackPlayerSource(track.Path);
             StatusText.Text = L("RenameSaved");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -450,10 +589,23 @@ public partial class RecordedTracksWindow : Window
 
     private static void ReplaceWithBackup(string path, string tempPath)
     {
-        var backupPath = Path.Combine(Path.GetDirectoryName(path)!,
-            $"{Path.GetFileNameWithoutExtension(path)}.{DateTime.Now:yyyyMMdd_HHmmss}.bak.mp3");
+        var backupPath = GetAvailableBackupPath(path);
         File.Move(path, backupPath);
         File.Move(tempPath, path);
+    }
+
+    private static string GetAvailableBackupPath(string path)
+    {
+        var folder = Path.GetDirectoryName(path)!;
+        var baseName = Path.GetFileNameWithoutExtension(path);
+        var backupPath = Path.Combine(folder, $"{baseName}.bak");
+        if (!File.Exists(backupPath)) return backupPath;
+
+        for (var index = 1; ; index++)
+        {
+            backupPath = Path.Combine(folder, $"{baseName}({index}).bak");
+            if (!File.Exists(backupPath)) return backupPath;
+        }
     }
 
     private static async Task RunFfmpegAsync(string ffmpegPath, IEnumerable<string> args)

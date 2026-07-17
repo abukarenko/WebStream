@@ -24,6 +24,9 @@ public partial class MainWindow : Window
     private const int MaxConcurrentSongRecordings = 3;
     private const int SignalBarCount = 48;
     private const double SignalReferenceFloor = 0.01;
+    private static readonly SolidColorBrush ArtworkFrameIdleBrush = new(System.Windows.Media.Color.FromRgb(43, 49, 58));
+    private static readonly SolidColorBrush ArtworkFrameMetadataBrush = new(System.Windows.Media.Color.FromRgb(128, 136, 146));
+    private static readonly SolidColorBrush ArtworkFrameReadyBrush = new(System.Windows.Media.Color.FromRgb(112, 224, 170));
     private const long AudioBufferBytes = 32L * 1024 * 1024;
     private static readonly TimeSpan MetadataTrackDelay = TimeSpan.FromSeconds(12);
     private static readonly HttpClient MetadataClient = new();
@@ -69,6 +72,8 @@ public partial class MainWindow : Window
     private string? _currentArtworkUrl;
     private string? _lastArtworkQuery;
     private bool _hasStreamArtwork;
+    private bool _isTrackStartLocked;
+    private bool _hasObservedTrackMetadata;
     private double _lastVolume = 0.3;
     private string? _trackTextLocalizationKey;
     private string? _statusLocalizationKey;
@@ -203,20 +208,27 @@ public partial class MainWindow : Window
     {
         if (_searchWindow is not null)
         {
+            LogAppEvent("SEARCH WINDOW ACTIVATE", string.Empty);
             _searchWindow.Activate();
             return;
         }
 
+        LogAppEvent("SEARCH WINDOW OPEN", string.Empty);
         _searchWindow = new StationSearchWindow(this)
         {
             Owner = this
         };
-        _searchWindow.Closed += (_, _) => _searchWindow = null;
+        _searchWindow.Closed += (_, _) =>
+        {
+            LogAppEvent("SEARCH WINDOW CLOSED", string.Empty);
+            _searchWindow = null;
+        };
         _searchWindow.Show();
     }
 
     private void RecordedTracksButton_Click(object sender, RoutedEventArgs e)
     {
+        LogAppEvent("RECORDED EDITOR OPEN", "main window hidden");
         StopPlaybackFromSearch();
         var window = new RecordedTracksWindow
         {
@@ -235,12 +247,14 @@ public partial class MainWindow : Window
         {
             Show();
             Activate();
+            LogAppEvent("RECORDED EDITOR CLOSED", "main window restored");
         }
     }
 
     private void LanguageButton_Click(object sender, RoutedEventArgs e)
     {
         LocalizationManager.ToggleLanguage();
+        LogAppEvent("LANGUAGE TOGGLE", Thread.CurrentThread.CurrentUICulture.Name);
     }
 
     private static string L(string key) => LocalizationManager.Get(key);
@@ -335,6 +349,7 @@ public partial class MainWindow : Window
 
     private void ApplySearchStation(SearchStationItem station)
     {
+        LogAppEvent("SEARCH STATION APPLIED", $"name: {station.Name}\nurl: {station.StreamUrl}");
         StreamUrlBox.Text = station.StreamUrl;
         StationNameText.Text = string.IsNullOrWhiteSpace(station.Name) ? L("MyStream") : station.Name;
         if (string.IsNullOrWhiteSpace(station.Description))
@@ -351,12 +366,14 @@ public partial class MainWindow : Window
 
         _stations.Insert(0, station);
         SavePlaylist();
+        LogAppEvent("PLAYLIST ADD FROM HISTORY", $"name: {station.Name}\nurl: {station.StreamUrl}");
     }
 
     private void ClearHistory_Click(object sender, RoutedEventArgs e)
     {
         _history.Clear();
         SaveHistory();
+        LogAppEvent("HISTORY CLEARED", string.Empty);
     }
 
     private void RemovePlaylistItem_Click(object sender, RoutedEventArgs e)
@@ -411,8 +428,7 @@ public partial class MainWindow : Window
         if (StationsList.SelectedItem is null) StationNameText.Text = L("MyStream");
         SetStatusKey("Connecting");
         SetTrackKey("ConnectingToRadio");
-        MetadataLogText.Clear();
-        AppendMetadata($"{L("ConnectingLog")}\n{value}");
+        LogAppEvent("PLAYBACK START", $"url: {value}");
         UpdateMetadata(StationNameText.Text, MetaDescriptionText.Text == "—" ? L("UserStream") : MetaDescriptionText.Text, value, "ConnectToStation");
         RegisterUrlHistory(StationNameText.Text, MetaDescriptionText.Text, value);
         _audioBuffer.Reset();
@@ -421,12 +437,15 @@ public partial class MainWindow : Window
         _currentTrackStartedAt = DateTime.Now;
         _currentTrackTitle = null;
         _currentTrackKey = null;
+        _isTrackStartLocked = false;
+        _hasObservedTrackMetadata = false;
         CancelPendingTrackUpdate();
         Player.Stop();
         ResetArtwork();
         _ = LoadStationArtworkAsync(uri, _metadataCancellation?.Token ?? CancellationToken.None);
         Player.Source = uri;
         Player.Play();
+        LogAppEvent("PLAYER PLAY", $"station: {StationNameText.Text}\nurl: {uri}");
         StartSignalAnalyzer(uri);
         StartMetadataReader(uri);
         _isPlaying = true;
@@ -444,6 +463,7 @@ public partial class MainWindow : Window
         SetStatusKey("Stopped");
         SetTrackKey("PlaybackStopped");
         SetMetaStatusKey("PlaybackStoppedStatus");
+        LogAppEvent("PLAYBACK STOP", $"url: {StreamUrlBox.Text.Trim()}");
         SaveAppState();
     }
 
@@ -453,6 +473,7 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(_currentTrackTitle))
             SetTrackKey("StreamPlaying");
         SetMetaStatusKey("OnAirStatus");
+        LogAppEvent("PLAYER OPENED", $"url: {Player.Source}");
         SaveCurrentStationToHistory();
     }
 
@@ -463,6 +484,7 @@ public partial class MainWindow : Window
         SetStatusKey("PlaybackError");
         SetTrackKey("PlaybackErrorText");
         SetMetaStatusKey("PlaybackErrorStatus");
+        LogAppEvent("PLAYER ERROR", $"url: {Player.Source}\n{e.ErrorException.Message}");
         StopMetadataReader();
         StopSignalAnalyzer();
         SaveAppState();
@@ -655,6 +677,7 @@ public partial class MainWindow : Window
         {
             SetStatusKey("CheckUrl");
             SetMetaStatusKey("NeedHttpStream");
+            LogAppEvent("RECORD BLOCKED", "reason: no valid HTTP(S) stream URL");
             return;
         }
 
@@ -662,6 +685,7 @@ public partial class MainWindow : Window
         {
             SetStatusKey("NotMp3");
             SetMetaStatusKey("HlsCannotRecord");
+            LogAppEvent("RECORD BLOCKED", $"reason: HLS stream\nurl: {_currentStreamUri}");
             return;
         }
 
@@ -674,6 +698,7 @@ public partial class MainWindow : Window
         {
             SetStatusKey("AlreadyRecording");
             SetMetaStatusKey("TrackAlreadyRecording");
+            LogAppEvent("RECORD BLOCKED", $"reason: duplicate active recording\nkey: {recordingKey}");
             _ = WindowsNotifier.ShowAsync(L("TrackAlreadyRecording"), BuildRecordingNotificationText());
             return;
         }
@@ -682,6 +707,7 @@ public partial class MainWindow : Window
         {
             SetStatusKey("Limit");
             SetMetaStatusKey("ThreeRecordingsLimit");
+            LogAppEvent("RECORD BLOCKED", $"reason: active recording limit\nlimit: {MaxConcurrentSongRecordings}");
             return;
         }
 
@@ -698,7 +724,7 @@ public partial class MainWindow : Window
         if (!directUrlRecording)
             File.WriteAllBytes(seedPath, seedBytes);
 
-        var outputPath = Path.Combine(recordingsFolder, directUrlRecording ? BuildUrlRecordingFileName(_currentStreamUri) : BuildRecordingFileName());
+        var outputPath = GetAvailableFilePath(recordingsFolder, directUrlRecording ? BuildUrlRecordingFileName(_currentStreamUri) : BuildRecordingFileName(), ".mp3");
         var title = directUrlRecording ? BuildUrlRecordingTitle(_currentStreamUri) : _currentTrackTitle ?? string.Empty;
         var process = StartSongRecorder(_currentStreamUri, seedPath, outputPath, title, directUrlRecording ? null : _currentArtworkUrl, directUrlRecording);
         if (process is null)
@@ -706,14 +732,16 @@ public partial class MainWindow : Window
             TryDeleteFile(seedPath);
             SetStatusKey("PlaybackError");
             SetMetaStatusKey("PlaybackErrorStatus");
+            LogAppEvent("RECORD START FAILED", $"output: {outputPath}");
             return;
         }
+        LogAppEvent("RECORDER PROCESS STARTED", $"pid: {process.Id}\noutput: {outputPath}");
 
         var recordingTitle = directUrlRecording ? title : BuildRecordingNotificationText();
         var timerOffset = directUrlRecording ? TimeSpan.Zero : DateTime.Now - _currentTrackStartedAt;
         if (timerOffset < TimeSpan.Zero) timerOffset = TimeSpan.Zero;
         var now = DateTime.Now;
-        _songRecordings.Add(new ActiveSongRecording(
+        var activeRecording = new ActiveSongRecording(
             recordingKey,
             process,
             recordingTitle,
@@ -722,12 +750,15 @@ public partial class MainWindow : Window
             _currentStreamUri.ToString(),
             outputPath,
             now,
-            now - timerOffset));
+            now - timerOffset);
+        _songRecordings.Add(activeRecording);
+        HookRecordingProcessExit(activeRecording);
         UpdateRecordingIndicator();
         SaveActiveRecordings();
         SetStatusKey("Recording");
         SetMetaStatusText(LF("SavingSongFile", Path.GetFileName(outputPath)));
         AppendMetadata($"{L("StartRecordingLog")}\n{recordingTitle}\n{Path.GetFileName(outputPath)}{(directUrlRecording ? $"\n{L("DirectUrlMode")}" : string.Empty)}");
+        LogAppEvent("RECORD STARTED", $"title: {recordingTitle}\nfile: {outputPath}\nmode: {(directUrlRecording ? "direct-url" : "song-buffer")}\nseed bytes: {seedBytes.Length}\ntimer offset: {timerOffset:mm\\:ss}");
         _ = WindowsNotifier.ShowAsync(L("SongRecordingNotification"), recordingTitle);
     }
 
@@ -771,9 +802,7 @@ public partial class MainWindow : Window
         var completed = _songRecordings.Where(recording => !recording.IsCompleted && IsRecordingFinished(recording)).ToList();
         foreach (var recording in completed)
         {
-            MarkRecordingCompleted(recording);
-            var duration = recording.ProcessDuration ?? DateTime.Now - recording.StartedAt;
-            AppendMetadata($"{L("StopRecordingLog")}\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}\n{LF("ProcessDuration", duration.ToString(@"mm\:ss"))}");
+            CompleteRecording(recording);
         }
 
         if (completed.Count > 0)
@@ -793,6 +822,36 @@ public partial class MainWindow : Window
         {
             return true;
         }
+    }
+
+    private void HookRecordingProcessExit(ActiveSongRecording recording)
+    {
+        try
+        {
+            recording.Process.EnableRaisingEvents = true;
+            recording.Process.Exited += (_, _) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (recording.IsCompleted) return;
+                    CompleteRecording(recording);
+                    UpdateRecordingIndicator();
+                    SaveActiveRecordings();
+                });
+            };
+        }
+        catch (InvalidOperationException)
+        {
+            CompleteRecording(recording);
+        }
+    }
+
+    private void CompleteRecording(ActiveSongRecording recording)
+    {
+        MarkRecordingCompleted(recording);
+        var duration = recording.ProcessDuration ?? DateTime.Now - recording.StartedAt;
+        AppendMetadata($"{L("StopRecordingLog")}\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}\n{LF("ProcessDuration", duration.ToString(@"mm\:ss"))}");
+        LogAppEvent("RECORD FINISHED", $"title: {recording.Title}\nfile: {recording.OutputPath}\npid: {SafeProcessId(recording.Process)}\nexit code: {SafeExitCode(recording.Process)}\nduration: {duration:mm\\:ss}");
     }
 
     private void UpdateRecordingIndicator()
@@ -837,18 +896,21 @@ public partial class MainWindow : Window
     private void StopRecordingTimerMenu_Click(object sender, RoutedEventArgs e)
     {
         if (!TryGetRecordingFromTimerMenu(sender, out var recording)) return;
+        LogAppEvent("RECORD TIMER STOP CLICK", $"file: {recording.OutputPath}");
         StopRecording(recording, deleteFile: false);
     }
 
     private void DeleteRecordingTimerMenu_Click(object sender, RoutedEventArgs e)
     {
         if (!TryGetRecordingFromTimerMenu(sender, out var recording)) return;
+        LogAppEvent("RECORD TIMER DELETE CLICK", $"file: {recording.OutputPath}");
         StopRecording(recording, deleteFile: true);
     }
 
     private void RecordingTimerSlot_LeftClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (!TryGetRecordingFromTimerSlot(sender, out var recording)) return;
+        LogAppEvent("RECORD TIMER SLOT OPEN", $"title: {recording.Title}\nurl: {recording.StreamUrl}");
         StationNameText.Text = recording.Station;
         SetTrackText(recording.Title);
         StreamUrlBox.Text = recording.StreamUrl;
@@ -894,10 +956,12 @@ public partial class MainWindow : Window
             TryDeleteFile(recording.OutputPath);
             _songRecordings.Remove(recording);
             AppendMetadata($"{L("RecordingDeletedLog")}\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}");
+            LogAppEvent("RECORD DELETED", $"title: {recording.Title}\nfile: {recording.OutputPath}");
         }
         else
         {
             AppendMetadata($"{L("RecordingStoppedLog")}\n{recording.Title}\n{Path.GetFileName(recording.OutputPath)}");
+            LogAppEvent("RECORD STOPPED BY USER", $"title: {recording.Title}\nfile: {recording.OutputPath}");
         }
 
         UpdateRecordingIndicator();
@@ -978,7 +1042,7 @@ public partial class MainWindow : Window
         safeName = Regex.Replace(safeName, @"\s+", " ");
         if (safeName.Length > 120) safeName = safeName[..120].Trim();
         if (string.IsNullOrWhiteSpace(safeName)) safeName = "WebStream";
-        return $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.mp3";
+        return safeName;
     }
 
     private static string BuildUrlRecordingFileName(Uri streamUri)
@@ -986,7 +1050,28 @@ public partial class MainWindow : Window
         var host = string.IsNullOrWhiteSpace(streamUri.Host) ? "stream" : streamUri.Host;
         var safeHost = string.Join("_", host.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
         if (string.IsNullOrWhiteSpace(safeHost)) safeHost = "stream";
-        return $"{safeHost}_{DateTime.Now:yyyyMMdd_HHmmss}.mp3";
+        return safeHost;
+    }
+
+    private static string GetAvailableFilePath(string folder, string baseName, string extension)
+    {
+        var safeBaseName = SanitizeFileName(baseName);
+        var path = Path.Combine(folder, $"{safeBaseName}{extension}");
+        if (!File.Exists(path)) return path;
+
+        for (var index = 1; ; index++)
+        {
+            path = Path.Combine(folder, $"{safeBaseName}({index}){extension}");
+            if (!File.Exists(path)) return path;
+        }
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        var safeName = string.Join("_", value.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim();
+        safeName = Regex.Replace(safeName, @"\s+", " ");
+        if (safeName.Length > 120) safeName = safeName[..120].Trim();
+        return string.IsNullOrWhiteSpace(safeName) ? "WebStream" : safeName;
     }
 
     private static string BuildUrlRecordingTitle(Uri streamUri)
@@ -1015,8 +1100,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void OpenWindowsPanel(string target)
+    private void OpenWindowsPanel(string target)
     {
+        LogAppEvent("OPEN WINDOWS PANEL", target);
         Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
     }
 
@@ -1261,6 +1347,7 @@ public partial class MainWindow : Window
     {
         StopMetadataReader();
         _metadataCancellation = new CancellationTokenSource();
+        LogAppEvent("METADATA READER START", $"url: {streamUri}");
         _ = streamUri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase)
             ? ReadHlsMetadataAsync(streamUri, _metadataCancellation.Token)
             : ReadIcyMetadataAsync(streamUri, _metadataCancellation.Token);
@@ -1268,6 +1355,8 @@ public partial class MainWindow : Window
 
     private void StopMetadataReader()
     {
+        if (_metadataCancellation is not null)
+            LogAppEvent("METADATA READER STOP", string.Empty);
         _metadataCancellation?.Cancel();
         _metadataCancellation?.Dispose();
         _metadataCancellation = null;
@@ -1321,12 +1410,14 @@ public partial class MainWindow : Window
         {
             // Switching or stopping a station intentionally ends the metadata stream.
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex)
         {
+            await Dispatcher.InvokeAsync(() => LogAppEvent("ICY METADATA ERROR", ex.Message));
             await Dispatcher.InvokeAsync(() => SetMetaStatusKey("NoIcyMetadata"));
         }
         catch (EndOfStreamException)
         {
+            await Dispatcher.InvokeAsync(() => LogAppEvent("ICY METADATA END", "stream ended"));
             await Dispatcher.InvokeAsync(() => SetMetaStatusKey("MetadataStreamEnded"));
         }
     }
@@ -1365,8 +1456,9 @@ public partial class MainWindow : Window
         {
             // Switching or stopping a station intentionally ends the metadata reader.
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex)
         {
+            await Dispatcher.InvokeAsync(() => LogAppEvent("HLS METADATA ERROR", ex.Message));
             await Dispatcher.InvokeAsync(() => SetMetaStatusKey("HlsMetadataUnavailable"));
         }
     }
@@ -1470,7 +1562,12 @@ public partial class MainWindow : Window
             var start = metadata.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
             if (start < 0) continue;
             start += prefix.Length;
-            var end = metadata.IndexOf(quote, start);
+            var terminator = $"{quote};";
+            var end = metadata.IndexOf(terminator, start, StringComparison.Ordinal);
+            if (end < 0)
+                end = metadata.IndexOf($";{name}=", start, StringComparison.OrdinalIgnoreCase);
+            if (end < 0)
+                end = metadata.IndexOf(quote, start);
             return (end < 0 ? metadata[start..] : metadata[start..end]).Trim('\0', ' ');
         }
         return null;
@@ -1503,6 +1600,7 @@ public partial class MainWindow : Window
         }
         if (changed)
         {
+            SetArtworkFrameMetadataState();
             SaveCurrentStationToHistory();
             UpdateCurrentUrlHistoryMetadata();
         }
@@ -1515,10 +1613,18 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(normalizedTitle)
             && !string.Equals(_currentTrackKey, songKey, StringComparison.OrdinalIgnoreCase))
         {
+            var canLockTrackStart = _hasObservedTrackMetadata;
+            LogAppEvent("TRACK CHANGED", $"from: {_currentTrackTitle ?? "—"}\nto: {normalizedTitle}\nkey: {songKey}\nbuffer position: {_audioBuffer.CurrentPosition}");
             _currentTrackTitle = normalizedTitle;
             _currentTrackKey = songKey;
             _currentTrackStartPosition = _audioBuffer.CurrentPosition;
             _currentTrackStartedAt = DateTime.Now;
+            _hasObservedTrackMetadata = true;
+            _isTrackStartLocked = canLockTrackStart;
+            if (_isTrackStartLocked)
+                SetArtworkFrameState(ArtworkFrameReadyBrush);
+            else
+                SetArtworkFrameMetadataState();
         }
 
         SetTrackText(title);
@@ -1538,10 +1644,13 @@ public partial class MainWindow : Window
             || string.Equals(_pendingTrackKey, songKey, StringComparison.OrdinalIgnoreCase))
             return;
 
+        _isTrackStartLocked = false;
+        SetArtworkFrameMetadataState();
         CancelPendingTrackUpdate();
         _pendingTrackKey = songKey;
         _pendingTrackCancellation = new CancellationTokenSource();
         var token = _pendingTrackCancellation.Token;
+        LogAppEvent("TRACK UPDATE SCHEDULED", $"title: {normalizedTitle}\nkey: {songKey}\ndelay: {MetadataTrackDelay.TotalSeconds:0}s");
         _ = ApplyDelayedTrackAsync(normalizedTitle, token);
         SetMetaStatusText(LF("MetadataWillApply", MetadataTrackDelay.TotalSeconds.ToString("0")));
     }
@@ -1608,9 +1717,40 @@ public partial class MainWindow : Window
         var timestamp = DateTime.Now.ToString("HH:mm:ss");
         var entry = $"[{timestamp}] {value.Trim()}\n\n";
         MetadataLogText.AppendText(entry);
-        if (MetadataLogText.Text.Length > 20_000)
-            MetadataLogText.Text = MetadataLogText.Text[^15_000..];
+        if (MetadataLogText.Text.Length > 80_000)
+            MetadataLogText.Text = MetadataLogText.Text[^60_000..];
         MetadataLogText.ScrollToEnd();
+    }
+
+    private void LogAppEvent(string action, string details)
+    {
+        AppendMetadata(string.IsNullOrWhiteSpace(details)
+            ? $"APP\n{action}"
+            : $"APP\n{action}\n{details}");
+    }
+
+    private static string SafeProcessId(Process process)
+    {
+        try
+        {
+            return process.Id.ToString();
+        }
+        catch (InvalidOperationException)
+        {
+            return "n/a";
+        }
+    }
+
+    private static string SafeExitCode(Process process)
+    {
+        try
+        {
+            return process.HasExited ? process.ExitCode.ToString() : "running";
+        }
+        catch (InvalidOperationException)
+        {
+            return "n/a";
+        }
     }
 
     private async Task FindArtworkAsync(string trackTitle, CancellationToken cancellationToken)
@@ -1798,11 +1938,30 @@ public partial class MainWindow : Window
         if (isStreamArtwork) _hasStreamArtwork = true;
     }
 
+    private void SetArtworkFrameState(SolidColorBrush brush)
+    {
+        ArtworkFrame.BorderBrush = brush;
+    }
+
+    private void SetArtworkFrameMetadataState()
+    {
+        if (!_isTrackStartLocked)
+            SetArtworkFrameState(ArtworkFrameMetadataBrush);
+    }
+
+    private void ArtworkClipHost_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        ArtworkClipHost.Clip = new RectangleGeometry(new Rect(0, 0, e.NewSize.Width, e.NewSize.Height), 10, 10);
+    }
+
     private void ResetArtwork()
     {
         ArtworkImage.Source = null;
         ArtworkImage.Visibility = Visibility.Collapsed;
         ArtworkPlaceholder.Visibility = Visibility.Visible;
+        SetArtworkFrameState(ArtworkFrameIdleBrush);
+        _isTrackStartLocked = false;
+        _hasObservedTrackMetadata = false;
         _currentArtworkUrl = null;
         _hasStreamArtwork = false;
         _lastArtworkQuery = null;
@@ -1931,7 +2090,7 @@ public partial class MainWindow : Window
             foreach (var state in states.Take(MaxConcurrentSongRecordings))
             {
                 if (!TryRestoreRecordingProcess(state, out var process)) continue;
-                _songRecordings.Add(new ActiveSongRecording(
+                var recording = new ActiveSongRecording(
                     state.TrackKey,
                     process,
                     state.Title,
@@ -1940,7 +2099,9 @@ public partial class MainWindow : Window
                     state.StreamUrl,
                     state.OutputPath,
                     state.StartedAt,
-                    state.TimerStartedAt));
+                    state.TimerStartedAt);
+                _songRecordings.Add(recording);
+                HookRecordingProcessExit(recording);
             }
 
             if (_songRecordings.Count > 0)

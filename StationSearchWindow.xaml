@@ -11,7 +11,9 @@
       <RowDefinition Height="Auto" />
       <RowDefinition Height="12" />
       <RowDefinition Height="*" />
-      <RowDefinition Height="14" />
+      <RowDefinition Height="8" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="10" />
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
@@ -72,12 +74,13 @@
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-        <TextBlock x:Name="SearchStatusText" Text="{DynamicResource SearchPrompt}"
-                   Foreground="{StaticResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center" />
       </Grid>
     </Border>
 
-    <Border Grid.Row="6" Background="{StaticResource Panel}" Padding="14">
+    <TextBlock Grid.Row="6" x:Name="SearchStatusText" Text="{DynamicResource SearchPrompt}"
+               Foreground="{StaticResource Muted}" TextTrimming="CharacterEllipsis" />
+
+    <Border Grid.Row="8" Background="{StaticResource Panel}" Padding="14">
       <Grid>
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto" />

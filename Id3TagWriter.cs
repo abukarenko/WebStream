@@ -52,6 +52,39 @@ public static class Id3TagWriter
         File.Delete(tempPath);
     }
 
+    public static async Task WriteMissingTextTagsAsync(string mp3Path, MetadataSuggestion suggestion)
+    {
+        if (!File.Exists(mp3Path)) return;
+
+        var current = Id3TagReader.Read(mp3Path);
+        var missingFrames = new Dictionary<string, string>();
+        AddMissing(missingFrames, "TIT2", current.Title, suggestion.Title);
+        AddMissing(missingFrames, "TPE1", current.Artist, suggestion.Artist);
+        AddMissing(missingFrames, "TALB", current.Album, suggestion.Album);
+        AddMissing(missingFrames, "TCON", current.Genre, suggestion.Genre);
+        if (missingFrames.Count == 0) return;
+
+        var original = await File.ReadAllBytesAsync(mp3Path);
+        var audioStart = GetAudioStart(original);
+        var existingFrames = TrimPadding(audioStart > 10 ? original[10..audioStart] : []);
+
+        using var frames = new MemoryStream();
+        frames.Write(existingFrames);
+        foreach (var frame in missingFrames)
+            WriteTextFrame(frames, frame.Key, frame.Value);
+
+        var tag = BuildTag(frames.ToArray());
+        var tempPath = $"{mp3Path}.autotagtmp";
+        await using (var output = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true))
+        {
+            await output.WriteAsync(tag);
+            await output.WriteAsync(original.AsMemory(audioStart));
+        }
+
+        File.Copy(tempPath, mp3Path, overwrite: true);
+        File.Delete(tempPath);
+    }
+
     private static byte[] BuildFrames(string title, byte[] artworkBytes, string mimeType)
     {
         using var frames = new MemoryStream();
@@ -66,6 +99,13 @@ public static class Id3TagWriter
 
         WriteApicFrame(frames, artworkBytes, mimeType);
         return frames.ToArray();
+    }
+
+    private static void AddMissing(IDictionary<string, string> frames, string id, string currentValue, string suggestedValue)
+    {
+        if (!string.IsNullOrWhiteSpace(currentValue) || string.IsNullOrWhiteSpace(suggestedValue))
+            return;
+        frames[id] = NormalizeText(suggestedValue);
     }
 
     private static byte[] BuildTag(byte[] frames)

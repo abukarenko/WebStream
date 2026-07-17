@@ -16,17 +16,17 @@
         <Grid DockPanel.Dock="Top" Margin="0,0,0,14">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="8" />
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="8" />
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="8" />
             <ColumnDefinition Width="*" />
           </Grid.ColumnDefinitions>
-          <Button x:Name="HistoryPanelButton" Content="{DynamicResource TabHistory}" Padding="10,8" Background="{StaticResource Accent}" Foreground="#102018" Click="ShowHistoryPanel_Click" />
-          <Button x:Name="PlaylistPanelButton" Grid.Column="2" Content="{DynamicResource TabPlaylist}" Padding="10,8" Click="ShowPlaylistPanel_Click" />
-          <Button x:Name="SearchButton" Grid.Column="4" Content="{DynamicResource TabSearch}" Padding="10,8" Click="SearchButton_Click" />
-          <Button x:Name="RecordedTracksButton" Grid.Column="6" Content="{DynamicResource TabRecorded}" Padding="10,8" Click="RecordedTracksButton_Click" />
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="8" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <Button x:Name="HistoryPanelButton" Margin="0,0,4,0" Content="{DynamicResource TabHistory}" Padding="10,8" Background="{StaticResource Accent}" Foreground="#102018" Click="ShowHistoryPanel_Click" />
+          <Button x:Name="SearchButton" Grid.Column="1" Margin="4,0,0,0" Content="{DynamicResource TabSearch}" Padding="10,8" Click="SearchButton_Click" />
+          <Button x:Name="PlaylistPanelButton" Grid.Row="2" Margin="0,0,4,0" Content="{DynamicResource TabPlaylist}" Padding="10,8" Click="ShowPlaylistPanel_Click" />
+          <Button x:Name="RecordedTracksButton" Grid.Row="2" Grid.Column="1" Margin="4,0,0,0" Content="{DynamicResource TabRecorded}" Padding="10,8" Click="RecordedTracksButton_Click" />
         </Grid>
 
         <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
@@ -52,11 +52,11 @@
         <Grid x:Name="HistoryPanel">
           <DockPanel>
             <ListBox x:Name="HistoryList" Background="Transparent" BorderThickness="0" Foreground="White"
-                     MouseDoubleClick="HistoryList_MouseDoubleClick" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     MouseDoubleClick="HistoryList_MouseDoubleClick" ScrollViewer.VerticalScrollBarVisibility="Visible"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
               <ListBox.ItemTemplate>
                 <DataTemplate>
-                  <StackPanel Margin="6,4">
+                  <StackPanel Margin="6,4,12,4">
                     <StackPanel.ContextMenu>
                       <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                         <MenuItem Header="{DynamicResource AddToPlaylist}" Click="AddHistoryItemToPlaylist_Click" />
@@ -77,11 +77,11 @@
         <Grid x:Name="PlaylistPanel" Visibility="Collapsed">
           <DockPanel>
             <ListBox x:Name="StationsList" Background="Transparent" BorderThickness="0" Foreground="White"
-                     SelectionChanged="StationsList_SelectionChanged" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     SelectionChanged="StationsList_SelectionChanged" ScrollViewer.VerticalScrollBarVisibility="Visible"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
               <ListBox.ItemTemplate>
                 <DataTemplate>
-                  <StackPanel Margin="6,4">
+                  <StackPanel Margin="6,4,12,4">
                     <StackPanel.ContextMenu>
                       <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                         <MenuItem Header="{DynamicResource RemoveFromPlaylist}" Click="RemovePlaylistItem_Click" />
@@ -127,8 +127,9 @@
           <ColumnDefinition Width="34" />
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
-        <Border Grid.Column="0" Width="180" Height="180" CornerRadius="16" Background="#2B313A" HorizontalAlignment="Center">
-          <Grid>
+        <Border x:Name="ArtworkFrame" Grid.Column="0" Width="180" Height="180" CornerRadius="16" Background="#2B313A"
+                BorderBrush="#2B313A" BorderThickness="4" Padding="8" HorizontalAlignment="Center">
+          <Grid x:Name="ArtworkClipHost" SizeChanged="ArtworkClipHost_SizeChanged">
             <Image x:Name="ArtworkImage" Stretch="UniformToFill" Visibility="Collapsed" ImageFailed="ArtworkImage_ImageFailed" />
             <Grid x:Name="ArtworkPlaceholder">
               <Ellipse Width="134" Height="134" Fill="#343C47" />
