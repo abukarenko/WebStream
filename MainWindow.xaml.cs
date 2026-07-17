@@ -1396,7 +1396,7 @@ public partial class MainWindow : Window
                 if (metadataLength == 0) continue;
                 var metadata = new byte[metadataLength];
                 await ReadExactlyAsync(stream, metadata, metadataLength, cancellationToken);
-                var text = Encoding.Latin1.GetString(metadata);
+                var text = DecodeIcyMetadata(metadata);
                 var title = ExtractStreamTitle(text);
                 await Dispatcher.InvokeAsync(() => AppendMetadata($"ICY metadata\n{text.Trim('\0', ' ')}"));
                 if (!string.IsNullOrWhiteSpace(title))
@@ -1542,6 +1542,18 @@ public partial class MainWindow : Window
     private static string? ExtractStreamTitle(string metadata)
     {
         return ExtractMetadataValue(metadata, "StreamTitle");
+    }
+
+    private static string DecodeIcyMetadata(byte[] metadata)
+    {
+        try
+        {
+            return new UTF8Encoding(false, true).GetString(metadata);
+        }
+        catch (DecoderFallbackException)
+        {
+            return Encoding.Latin1.GetString(metadata);
+        }
     }
 
     private static string? ExtractCoverArtUrl(string metadata)
@@ -1699,7 +1711,8 @@ public partial class MainWindow : Window
 
     private static string NormalizeTitle(string title)
     {
-        return Regex.Replace(title, @"\s+", " ").Trim();
+        var clean = Regex.Replace(title, @"\s*\|\|.*$", "", RegexOptions.Singleline);
+        return Regex.Replace(clean, @"\s+", " ").Trim();
     }
 
     private static string BuildSongCompareKey(string? title)

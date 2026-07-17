@@ -400,7 +400,7 @@ public static class SongRecorderWorker
 
             var metadata = new byte[metadataLength];
             await ReadExactlyAsync(source, metadata, metadataLength);
-            var title = ExtractStreamTitle(Encoding.Latin1.GetString(metadata));
+            var title = ExtractStreamTitle(DecodeIcyMetadata(metadata));
             var songKey = BuildSongCompareKey(title);
             title = NormalizeTitle(title);
             if (string.IsNullOrWhiteSpace(title)) continue;
@@ -509,9 +509,22 @@ public static class SongRecorderWorker
         return null;
     }
 
+    private static string DecodeIcyMetadata(byte[] metadata)
+    {
+        try
+        {
+            return new UTF8Encoding(false, true).GetString(metadata);
+        }
+        catch (DecoderFallbackException)
+        {
+            return Encoding.Latin1.GetString(metadata);
+        }
+    }
+
     private static string NormalizeTitle(string? title)
     {
-        return Regex.Replace(title ?? string.Empty, @"\s+", " ").Trim();
+        var clean = Regex.Replace(title ?? string.Empty, @"\s*\|\|.*$", "", RegexOptions.Singleline);
+        return Regex.Replace(clean, @"\s+", " ").Trim();
     }
 
     private static string BuildSongCompareKey(string? title)
