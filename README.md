@@ -14,20 +14,14 @@ WebStream is a Windows WPF internet radio player with stream metadata, artwork l
 - Shows Windows notifications when song recording starts and when the saved file is complete.
 - Embeds available cover art and basic ID3 metadata into saved MP3 files.
 
-## Recording AAC Streams
+## FFmpeg Tools in the Release
 
-MP3 streams are saved directly. AAC streams must be transcoded to MP3 with `ffmpeg.exe`.
+The Windows release archive already includes the FFmpeg command-line tools next to `WebStream.exe`, so a normal release install does not require a separate FFmpeg download.
 
-To enable AAC -> MP3 recording, place `ffmpeg.exe` in one of these locations:
+- `ffmpeg.exe` is used by WebStream when an AAC stream must be converted to MP3, when a stream without usable metadata/back buffer is recorded from its URL, when the signal indicator analyzes an active stream, and when saved tracks are trimmed or rewritten with updated tags/artwork.
+- `ffplay.exe` is included for manual playback checks from the command line, for example when testing whether a stream or saved audio file can be decoded outside WebStream.
+- `ffprobe.exe` is included for manual media inspection from the command line, for example when checking codecs, duration, bitrate, stream layout, or metadata in a saved recording.
 
-- Next to `WebStream.exe`
-- `ffmpeg\bin\ffmpeg.exe` next to `WebStream.exe`
-- `tools\ffmpeg.exe` next to `WebStream.exe`
-- `tools\ffmpeg\bin\ffmpeg.exe` next to `WebStream.exe`
-- Any folder listed in the Windows `PATH`
-
-Recommended Windows builds are available from:
+The bundled tools come from the Windows FFmpeg builds by Gyan Doshi:
 
 - https://www.gyan.dev/ffmpeg/builds/
-
-Use the release essentials build, then copy `bin\ffmpeg.exe` into the program folder if you do not want to add FFmpeg to `PATH`.
