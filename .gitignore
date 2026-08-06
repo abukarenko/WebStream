@@ -2,3 +2,5 @@ bin/
 obj/
 desktop.ini
 helper.txt
+/ffmpeg-*-essentials_build/
+/tools/ffmpeg/*.exe

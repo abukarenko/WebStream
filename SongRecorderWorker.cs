@@ -523,8 +523,7 @@ public static class SongRecorderWorker
 
     private static string NormalizeTitle(string? title)
     {
-        var clean = Regex.Replace(title ?? string.Empty, @"\s*\|\|.*$", "", RegexOptions.Singleline);
-        return Regex.Replace(clean, @"\s+", " ").Trim();
+        return TrackMetadataNormalizer.NormalizeTitle(title);
     }
 
     private static string BuildSongCompareKey(string? title)

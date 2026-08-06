@@ -13,5 +13,20 @@
   <ItemGroup>
     <Content Include="Assets\webstream.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="strings.ini" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="tools\ffmpeg\ffmpeg.exe"
+             Condition="Exists('tools\ffmpeg\ffmpeg.exe')"
+             Link="ffmpeg.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="tools\ffmpeg\ffplay.exe"
+             Condition="Exists('tools\ffmpeg\ffplay.exe')"
+             Link="ffplay.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="tools\ffmpeg\ffprobe.exe"
+             Condition="Exists('tools\ffmpeg\ffprobe.exe')"
+             Link="ffprobe.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

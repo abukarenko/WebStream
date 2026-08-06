@@ -88,7 +88,7 @@ public static class Id3TagWriter
     private static byte[] BuildFrames(string title, byte[] artworkBytes, string mimeType)
     {
         using var frames = new MemoryStream();
-        var cleanTitle = NormalizeText(title);
+        var cleanTitle = TrackMetadataNormalizer.NormalizeTitle(title);
         if (!string.IsNullOrWhiteSpace(cleanTitle))
         {
             var (artist, songTitle) = SplitTitle(cleanTitle);

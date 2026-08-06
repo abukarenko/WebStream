@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
@@ -15,30 +17,41 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using NotifyIcon = System.Windows.Forms.NotifyIcon;
 using ToolStripMenuItem = System.Windows.Forms.ToolStripMenuItem;
-using Rectangle = System.Windows.Shapes.Rectangle;
 
 namespace WebStream;
 
 public partial class MainWindow : Window
 {
+    private enum PlaybackOrigin { Manual, Search, History, Playlist, UrlNavigation, Recording, Restored }
+
+    private readonly record struct SongRatingIdentity(string Key, string Artist, string Title, string Genre);
+
     private const int MaxConcurrentSongRecordings = 3;
-    private const int SignalBarCount = 48;
-    private const double SignalReferenceFloor = 0.01;
+    private const int SignalBarCount = SpectrumDisplay.BarCount;
+    private const int SpectrumFftSize = 2048;
+    private const int SpectrumHopSize = 512;
+    private const int SpectrumSampleRate = 22050;
+    private const double SpectrumMinFrequency = 45;
+    private const double SpectrumMaxFrequency = 10000;
     private static readonly SolidColorBrush ArtworkFrameIdleBrush = new(System.Windows.Media.Color.FromRgb(43, 49, 58));
     private static readonly SolidColorBrush ArtworkFrameMetadataBrush = new(System.Windows.Media.Color.FromRgb(128, 136, 146));
     private static readonly SolidColorBrush ArtworkFrameReadyBrush = new(System.Windows.Media.Color.FromRgb(112, 224, 170));
+    private static readonly SolidColorBrush UrlRatingOnBrush = new(System.Windows.Media.Color.FromRgb(255, 196, 0));
+    private static readonly SolidColorBrush UrlRatingOffBrush = new(System.Windows.Media.Color.FromRgb(81, 71, 19));
+    private static readonly SolidColorBrush SongRatingOnBrush = new(System.Windows.Media.Color.FromRgb(24, 215, 126));
+    private static readonly SolidColorBrush SongRatingOffBrush = new(System.Windows.Media.Color.FromRgb(36, 69, 54));
     private const long AudioBufferBytes = 32L * 1024 * 1024;
     private static readonly TimeSpan MetadataTrackDelay = TimeSpan.FromSeconds(12);
     private static readonly HttpClient MetadataClient = new();
     private readonly AudioBackBuffer _audioBuffer = new(AudioBufferBytes);
     private readonly ObservableCollection<RadioStation> _stations = new();
     private readonly ObservableCollection<RadioStation> _history = new();
+    private readonly Dictionary<string, int> _urlRatings = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SongRatingEntry> _songRatings = new(StringComparer.OrdinalIgnoreCase);
     private ICollectionView? _stationsView;
     private ICollectionView? _historyView;
     private readonly List<RadioStation> _urlHistory = new();
     private readonly List<ActiveSongRecording> _songRecordings = new();
-    private readonly List<Rectangle> _signalBars = new();
-    private readonly double[] _signalLevels = new double[SignalBarCount];
     private readonly DispatcherTimer _recordingIndicatorTimer = new();
     private readonly NotifyIcon _trayIcon = new();
     private ToolStripMenuItem? _trayShowItem;
@@ -53,14 +66,20 @@ public partial class MainWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "active-recordings.json");
     private readonly string _urlHistoryPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "url-history.json");
+    private readonly string _urlRatingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "url-ratings.json");
+    private readonly string _songRatingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WebStream", "song-ratings.json");
     private bool _isPlaying;
     private CancellationTokenSource? _metadataCancellation;
     private CancellationTokenSource? _pendingTrackCancellation;
     private CancellationTokenSource? _signalCancellation;
     private Process? _signalProcess;
-    private double _signalReferenceLevel = SignalReferenceFloor;
     private int _historyNavigationIndex = -1;
     private bool _isNavigatingUrlHistory;
+    private string? _historyWritableStreamUrl;
+    private string? _listIndicatorUrl;
+    private bool _positionIndicatorUsesHistory = true;
     private bool _isListFilterActive;
     private StationSearchWindow? _searchWindow;
     private Uri? _currentStreamUri;
@@ -69,6 +88,8 @@ public partial class MainWindow : Window
     private string? _currentTrackTitle;
     private string? _currentTrackKey;
     private string? _pendingTrackKey;
+    private int? _currentMetadataSongRating;
+    private int? _pendingTrackMetadataRating;
     private string? _currentArtworkUrl;
     private string? _lastArtworkQuery;
     private bool _hasStreamArtwork;
@@ -94,12 +115,13 @@ public partial class MainWindow : Window
         StateChanged += MainWindow_StateChanged;
         StationsList.ItemsSource = _stations;
         HistoryList.ItemsSource = _history;
+        _stations.CollectionChanged += StationCollection_CollectionChanged;
+        _history.CollectionChanged += StationCollection_CollectionChanged;
         _stationsView = CollectionViewSource.GetDefaultView(_stations);
         _historyView = CollectionViewSource.GetDefaultView(_history);
         _stationsView.Filter = FilterRadioStation;
         _historyView.Filter = FilterRadioStation;
         SetPlayerVolume(VolumeSlider.Value / 100);
-        InitializeSignalBars();
         UpdateRecordingIndicator();
         _recordingIndicatorTimer.Interval = TimeSpan.FromSeconds(1);
         _recordingIndicatorTimer.Tick += (_, _) =>
@@ -112,7 +134,13 @@ public partial class MainWindow : Window
         LoadHistory();
         LoadUrlHistory();
         LoadActiveRecordings();
+        LoadUrlRatings();
+        RefreshAllUrlRatingStars();
+        LoadSongRatings();
         LoadAppState();
+        UpdateUrlRatingDisplay();
+        UpdateSongRatingDisplay();
+        UpdateListPositionIndicator();
         UpdateListFilterButton();
     }
 
@@ -122,18 +150,30 @@ public partial class MainWindow : Window
         _stations.Add(new RadioStation("SomaFM Drone Zone", "Ambient · Demo", "https://ice1.somafm.com/dronezone-128-mp3"));
     }
 
-    private void StationsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void StationsList_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (StationsList.SelectedItem is not RadioStation station) return;
-        HistoryList.SelectedItem = null;
-        SelectStation(station);
+        e.Handled = true;
+        if (TryGetClickedStation(StationsList, e.OriginalSource) is not { } station) return;
+        SetListIndicatorUrl(station.StreamUrl);
+        if (e.ClickCount != 2) return;
+        SelectStation(station, PlaybackOrigin.Playlist);
     }
 
-    private void HistoryList_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    private void HistoryList_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (HistoryList.SelectedItem is not RadioStation station) return;
-        StationsList.SelectedItem = null;
-        SelectStation(station);
+        e.Handled = true;
+        if (TryGetClickedStation(HistoryList, e.OriginalSource) is not { } station) return;
+        SetListIndicatorUrl(station.StreamUrl);
+        if (e.ClickCount != 2) return;
+        SelectStation(station, PlaybackOrigin.History);
+    }
+
+    private static RadioStation? TryGetClickedStation(System.Windows.Controls.ListBox listBox, object originalSource)
+    {
+        if (originalSource is not DependencyObject source) return null;
+        return ItemsControl.ContainerFromElement(listBox, source) is System.Windows.Controls.ListBoxItem item
+            ? item.DataContext as RadioStation
+            : null;
     }
 
     private void ListFilterTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -166,6 +206,7 @@ public partial class MainWindow : Window
     {
         _stationsView?.Refresh();
         _historyView?.Refresh();
+        UpdateListPositionIndicator();
     }
 
     private void UpdateListFilterButton()
@@ -186,22 +227,28 @@ public partial class MainWindow : Window
 
     private void ShowHistoryPanel_Click(object sender, RoutedEventArgs e)
     {
+        _positionIndicatorUsesHistory = true;
+        _listIndicatorUrl = StreamUrlBox.Text.Trim();
         HistoryPanel.Visibility = Visibility.Visible;
         PlaylistPanel.Visibility = Visibility.Collapsed;
         HistoryPanelButton.Background = (System.Windows.Media.Brush)FindResource("Accent");
         HistoryPanelButton.Foreground = System.Windows.Media.Brushes.Black;
         PlaylistPanelButton.ClearValue(BackgroundProperty);
         PlaylistPanelButton.ClearValue(ForegroundProperty);
+        UpdateListPositionIndicator();
     }
 
     private void ShowPlaylistPanel_Click(object sender, RoutedEventArgs e)
     {
+        _positionIndicatorUsesHistory = false;
+        _listIndicatorUrl = StreamUrlBox.Text.Trim();
         HistoryPanel.Visibility = Visibility.Collapsed;
         PlaylistPanel.Visibility = Visibility.Visible;
         PlaylistPanelButton.Background = (System.Windows.Media.Brush)FindResource("Accent");
         PlaylistPanelButton.Foreground = System.Windows.Media.Brushes.Black;
         HistoryPanelButton.ClearValue(BackgroundProperty);
         HistoryPanelButton.ClearValue(ForegroundProperty);
+        UpdateListPositionIndicator();
     }
 
     private void SearchButton_Click(object sender, RoutedEventArgs e)
@@ -228,26 +275,32 @@ public partial class MainWindow : Window
 
     private void RecordedTracksButton_Click(object sender, RoutedEventArgs e)
     {
-        LogAppEvent("RECORDED EDITOR OPEN", "main window hidden");
-        StopPlaybackFromSearch();
-        var window = new RecordedTracksWindow
-        {
-            WindowStartupLocation = WindowStartupLocation.Manual,
-            Left = Left,
-            Top = Top,
-            Width = ActualWidth,
-            Height = ActualHeight
-        };
-        Hide();
+        var volumeBeforeEditor = Player.Volume;
+        var restoreVolume = volumeBeforeEditor > 0;
+        LogAppEvent("RECORDED EDITOR OPEN",
+            $"main window hidden\nstream continues\nvolume before editor: {volumeBeforeEditor:0.00}");
+        if (restoreVolume) SetPlayerVolume(0);
+
         try
         {
+            var window = new RecordedTracksWindow
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = Left,
+                Top = Top,
+                Width = ActualWidth,
+                Height = ActualHeight
+            };
+            Hide();
             window.ShowDialog();
         }
         finally
         {
+            if (restoreVolume) SetPlayerVolume(volumeBeforeEditor);
             Show();
             Activate();
-            LogAppEvent("RECORDED EDITOR CLOSED", "main window restored");
+            LogAppEvent("RECORDED EDITOR CLOSED",
+                $"main window restored\nstream kept running\nvolume restored: {Player.Volume:0.00}");
         }
     }
 
@@ -301,7 +354,7 @@ public partial class MainWindow : Window
     internal void PreviewSearchStation(SearchStationItem station)
     {
         ApplySearchStation(station);
-        StartPlayback();
+        StartPlayback(preserveStationIdentity: true, origin: PlaybackOrigin.Search);
     }
 
     internal bool AddSearchStationToPlaylist(SearchStationItem station)
@@ -311,7 +364,7 @@ public partial class MainWindow : Window
         if (_stations.Any(item => string.Equals(item.StreamUrl, station.StreamUrl, StringComparison.OrdinalIgnoreCase)))
             return false;
 
-        _stations.Insert(0, radioStation);
+        _stations.Add(radioStation);
         SavePlaylist();
         return true;
     }
@@ -364,9 +417,42 @@ public partial class MainWindow : Window
         if (!TryGetContextStation(sender, out var station)) return;
         if (_stations.Any(item => string.Equals(item.StreamUrl, station.StreamUrl, StringComparison.OrdinalIgnoreCase))) return;
 
-        _stations.Insert(0, station);
+        _stations.Add(station with { PlayedAt = DateTime.Now });
         SavePlaylist();
         LogAppEvent("PLAYLIST ADD FROM HISTORY", $"name: {station.Name}\nurl: {station.StreamUrl}");
+    }
+
+    private void ArtworkFrame_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        e.Handled = true;
+
+        var streamUrl = StreamUrlBox.Text.Trim();
+        if (!Uri.TryCreate(streamUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            SetMetaStatusKey("NeedHttpStream");
+            return;
+        }
+
+        var stationName = StationNameText.Text.Trim();
+        if (string.IsNullOrWhiteSpace(stationName) || stationName == L("SelectStation"))
+            stationName = L("MyStream");
+
+        if (_stations.Any(item => string.Equals(item.StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase)))
+        {
+            SetMetaStatusText(LF("PlaylistAlreadyContains", stationName));
+            return;
+        }
+
+        var description = MetaDescriptionText.Text.Trim();
+        if (string.IsNullOrWhiteSpace(description) || description == "—")
+            description = L("UserStream");
+
+        _stations.Add(new RadioStation(stationName, description, streamUrl, DateTime.Now));
+        SavePlaylist();
+        SetMetaStatusText(LF("PlaylistAdded", stationName));
+        LogAppEvent("PLAYLIST ADD FROM ARTWORK", $"name: {stationName}\nurl: {streamUrl}");
     }
 
     private void ClearHistory_Click(object sender, RoutedEventArgs e)
@@ -391,13 +477,13 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private void SelectStation(RadioStation station)
+    private void SelectStation(RadioStation station, PlaybackOrigin origin)
     {
         StationNameText.Text = station.Name;
         SetTrackText(station.Description);
         StreamUrlBox.Text = station.StreamUrl;
         UpdateMetadata(station.Name, station.Description, station.StreamUrl, "ConnectToStation");
-        StartPlayback();
+        StartPlayback(preserveStationIdentity: true, origin: origin);
     }
 
     private void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -415,7 +501,7 @@ public partial class MainWindow : Window
         StartPlayback();
     }
 
-    private void StartPlayback()
+    private void StartPlayback(bool preserveStationIdentity = false, PlaybackOrigin origin = PlaybackOrigin.Manual)
     {
         var value = StreamUrlBox.Text.Trim();
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
@@ -425,10 +511,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (StationsList.SelectedItem is null) StationNameText.Text = L("MyStream");
+        var isSameCurrentStream = _currentStreamUri is not null
+            && Uri.Compare(_currentStreamUri, uri, UriComponents.HttpRequestUrl, UriFormat.UriEscaped,
+                StringComparison.OrdinalIgnoreCase) == 0;
+        if (!preserveStationIdentity && !isSameCurrentStream)
+            StationNameText.Text = L("MyStream");
+        var canAddToHistory = (origin == PlaybackOrigin.Search || (origin == PlaybackOrigin.Manual && !isSameCurrentStream))
+            && !_history.Any(item => string.Equals(item.StreamUrl, value, StringComparison.OrdinalIgnoreCase));
+        _historyWritableStreamUrl = canAddToHistory ? value : null;
         SetStatusKey("Connecting");
         SetTrackKey("ConnectingToRadio");
-        LogAppEvent("PLAYBACK START", $"url: {value}");
+        LogAppEvent("PLAYBACK START", $"origin: {origin}\nurl: {value}");
         UpdateMetadata(StationNameText.Text, MetaDescriptionText.Text == "—" ? L("UserStream") : MetaDescriptionText.Text, value, "ConnectToStation");
         RegisterUrlHistory(StationNameText.Text, MetaDescriptionText.Text, value);
         _audioBuffer.Reset();
@@ -437,6 +530,8 @@ public partial class MainWindow : Window
         _currentTrackStartedAt = DateTime.Now;
         _currentTrackTitle = null;
         _currentTrackKey = null;
+        _currentMetadataSongRating = null;
+        UpdateSongRatingDisplay();
         _isTrackStartLocked = false;
         _hasObservedTrackMetadata = false;
         CancelPendingTrackUpdate();
@@ -589,6 +684,214 @@ public partial class MainWindow : Window
         StreamUrlBox.CaretIndex = StreamUrlBox.Text.Length;
     }
 
+    private void CopyStreamUrl_Click(object sender, RoutedEventArgs e)
+    {
+        var url = StreamUrlBox.Text.Trim();
+        if (url.Length == 0) return;
+        System.Windows.Clipboard.SetText(url);
+    }
+
+    private void StreamUrlBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        _listIndicatorUrl = StreamUrlBox.Text.Trim();
+        UpdateUrlRatingDisplay();
+        UpdateListPositionIndicator();
+    }
+
+    private void SetListIndicatorUrl(string streamUrl)
+    {
+        _listIndicatorUrl = streamUrl.Trim();
+        UpdateListPositionIndicator();
+    }
+
+    private void UpdateListPositionIndicator()
+    {
+        var currentUrl = _listIndicatorUrl ?? StreamUrlBox.Text.Trim();
+        var view = _positionIndicatorUsesHistory ? _historyView : _stationsView;
+        var visibleItems = view is null
+            ? (_positionIndicatorUsesHistory ? _history : _stations).ToList()
+            : view.Cast<RadioStation>().ToList();
+        var currentIndex = 0;
+        if (!string.IsNullOrWhiteSpace(currentUrl))
+        {
+            for (var index = 0; index < visibleItems.Count; index++)
+            {
+                if (!string.Equals(visibleItems[index].StreamUrl, currentUrl, StringComparison.OrdinalIgnoreCase)) continue;
+                currentIndex = index + 1;
+                break;
+            }
+        }
+
+        PlaylistPositionText.Text = $"{currentIndex} / {visibleItems.Count}";
+    }
+
+    private void UrlRatingStar_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button { Tag: string tag }
+            || !int.TryParse(tag, out var clickedRating)
+            || clickedRating is < 1 or > 5
+            || !TryGetCurrentUrlRatingKey(out var urlKey))
+            return;
+
+        var currentRating = _urlRatings.GetValueOrDefault(urlKey);
+        var newRating = currentRating == clickedRating ? clickedRating - 1 : clickedRating;
+
+        if (newRating == 0)
+            _urlRatings.Remove(urlKey);
+        else
+            _urlRatings[urlKey] = newRating;
+
+        SaveUrlRatings();
+        UpdateUrlRatingDisplay();
+        RefreshUrlRatingStars(urlKey);
+        LogAppEvent("URL RATING CHANGED", $"rating: {newRating}\nurl: {urlKey}");
+    }
+
+    private bool TryGetCurrentUrlRatingKey(out string urlKey)
+    {
+        urlKey = string.Empty;
+        return TryGetUrlRatingKey(StreamUrlBox.Text, out urlKey);
+    }
+
+    private static bool TryGetUrlRatingKey(string? streamUrl, out string urlKey)
+    {
+        urlKey = string.Empty;
+        if (!Uri.TryCreate(streamUrl?.Trim(), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return false;
+
+        urlKey = uri.GetComponents(UriComponents.HttpRequestUrl, UriFormat.UriEscaped);
+        return true;
+    }
+
+    private void UpdateUrlRatingDisplay()
+    {
+        var hasUrl = TryGetCurrentUrlRatingKey(out var urlKey);
+        var rating = hasUrl ? _urlRatings.GetValueOrDefault(urlKey) : 0;
+        UrlRatingPanel.Opacity = hasUrl ? 1 : 0.4;
+        UrlRatingPanel.IsEnabled = hasUrl;
+
+        foreach (var button in UrlRatingPanel.Children.OfType<System.Windows.Controls.Button>())
+        {
+            var starNumber = button.Tag is string tag && int.TryParse(tag, out var value) ? value : 0;
+            button.Foreground = starNumber > 0 && starNumber <= rating ? UrlRatingOnBrush : UrlRatingOffBrush;
+        }
+    }
+
+    private void StationCollection_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems is not null)
+        {
+            foreach (var station in e.NewItems.OfType<RadioStation>())
+                UpdateStationUrlRatingStars(station);
+        }
+
+        UpdateListPositionIndicator();
+    }
+
+    private void RefreshAllUrlRatingStars()
+    {
+        foreach (var station in _stations.Concat(_history))
+            UpdateStationUrlRatingStars(station);
+    }
+
+    private void RefreshUrlRatingStars(string urlKey)
+    {
+        foreach (var station in _stations.Concat(_history))
+        {
+            if (TryGetUrlRatingKey(station.StreamUrl, out var stationKey)
+                && string.Equals(stationKey, urlKey, StringComparison.OrdinalIgnoreCase))
+                UpdateStationUrlRatingStars(station);
+        }
+    }
+
+    private void UpdateStationUrlRatingStars(RadioStation station)
+    {
+        station.UrlRatingStars = TryGetUrlRatingKey(station.StreamUrl, out var urlKey)
+            && _urlRatings.TryGetValue(urlKey, out var rating)
+            ? new string('★', Math.Clamp(rating, 0, 5))
+            : string.Empty;
+    }
+
+    private void SongRatingStar_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button { Tag: string tag }
+            || !int.TryParse(tag, out var clickedRating)
+            || clickedRating is < 1 or > 5
+            || !TryGetCurrentSongRatingIdentity(out var identity))
+            return;
+
+        var currentRating = GetEffectiveSongRating(identity.Key);
+        var newRating = currentRating == clickedRating ? clickedRating - 1 : clickedRating;
+        _songRatings[identity.Key] = new SongRatingEntry(
+            identity.Artist, identity.Title, identity.Genre, newRating, DateTime.Now);
+
+        SaveSongRatings();
+        UpdateSongRatingDisplay();
+        LogAppEvent("SONG RATING CHANGED",
+            $"artist: {identity.Artist}\ntitle: {identity.Title}\ngenre: {identity.Genre}\nrating: {newRating}");
+    }
+
+    private void UpdateSongRatingDisplay()
+    {
+        var hasSong = TryGetCurrentSongRatingIdentity(out var identity);
+        var rating = hasSong ? GetEffectiveSongRating(identity.Key) : 0;
+        SongRatingPanel.Visibility = hasSong ? Visibility.Visible : Visibility.Collapsed;
+        SongRatingPanel.Opacity = 1;
+        SongRatingPanel.IsEnabled = hasSong;
+
+        foreach (var button in SongRatingPanel.Children.OfType<System.Windows.Controls.Button>())
+        {
+            var starNumber = button.Tag is string tag && int.TryParse(tag, out var value) ? value : 0;
+            button.Foreground = starNumber > 0 && starNumber <= rating ? SongRatingOnBrush : SongRatingOffBrush;
+        }
+    }
+
+    private int GetEffectiveSongRating(string songKey)
+    {
+        return _songRatings.TryGetValue(songKey, out var localRating)
+            ? localRating.Rating
+            : _currentMetadataSongRating ?? 0;
+    }
+
+    private bool TryGetCurrentSongRatingIdentity(out SongRatingIdentity identity)
+    {
+        identity = default;
+        if (string.IsNullOrWhiteSpace(_currentTrackTitle)) return false;
+
+        var (artist, title) = SplitTrackArtistAndTitle(_currentTrackTitle);
+        var genre = MetaDescriptionText.Text.Trim();
+        if (genre == "—" || genre == L("UserStream")) genre = string.Empty;
+
+        var artistKey = NormalizeSongRatingPart(artist);
+        var titleKey = NormalizeSongRatingPart(title);
+        var genreKey = NormalizeSongRatingPart(genre);
+        if (string.IsNullOrWhiteSpace(artistKey) || string.IsNullOrWhiteSpace(titleKey)) return false;
+
+        var key = $"ARTIST={artistKey}|TITLE={titleKey}|GENRE={genreKey}";
+        identity = new SongRatingIdentity(key, artist.Trim(), title.Trim(), genre);
+        return true;
+    }
+
+    private static (string Artist, string Title) SplitTrackArtistAndTitle(string value)
+    {
+        foreach (var separator in new[] { " - ", " – ", " — " })
+        {
+            var index = value.IndexOf(separator, StringComparison.Ordinal);
+            if (index <= 0 || index + separator.Length >= value.Length) continue;
+            return (value[..index].Trim(), value[(index + separator.Length)..].Trim());
+        }
+
+        return (string.Empty, value.Trim());
+    }
+
+    private static string NormalizeSongRatingPart(string value)
+    {
+        var normalized = value.Normalize(NormalizationForm.FormKC).ToUpperInvariant();
+        normalized = Regex.Replace(normalized, @"[^\p{L}\p{N}]+", " ");
+        return Regex.Replace(normalized, @"\s+", " ").Trim();
+    }
+
     private void ClearStreamUrl_Click(object sender, RoutedEventArgs e)
     {
         StreamUrlBox.Clear();
@@ -658,7 +961,7 @@ public partial class MainWindow : Window
         _isNavigatingUrlHistory = true;
         try
         {
-            SelectStation(_urlHistory[_historyNavigationIndex]);
+            SelectStation(_urlHistory[_historyNavigationIndex], PlaybackOrigin.UrlNavigation);
         }
         finally
         {
@@ -915,7 +1218,7 @@ public partial class MainWindow : Window
         SetTrackText(recording.Title);
         StreamUrlBox.Text = recording.StreamUrl;
         UpdateMetadata(recording.Station, recording.Description, recording.StreamUrl, "SwitchToRecordingChannel");
-        StartPlayback();
+        StartPlayback(preserveStationIdentity: true, origin: PlaybackOrigin.Recording);
     }
 
     private bool TryGetRecordingFromTimerMenu(object sender, out ActiveSongRecording recording)
@@ -1128,27 +1431,6 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 
-    private void InitializeSignalBars()
-    {
-        SignalBarsHost.Children.Clear();
-        _signalBars.Clear();
-
-        for (var i = 0; i < SignalBarCount; i++)
-        {
-            var bar = new Rectangle
-            {
-                Height = 2,
-                MinHeight = 2,
-                Width = 4,
-                Margin = new Thickness(1, 0, 1, 0),
-                VerticalAlignment = VerticalAlignment.Bottom,
-                Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(68, 83, 98))
-            };
-            _signalBars.Add(bar);
-            SignalBarsHost.Children.Add(bar);
-        }
-    }
-
     private void StartSignalAnalyzer(Uri streamUri)
     {
         StopSignalAnalyzer();
@@ -1211,7 +1493,7 @@ public partial class MainWindow : Window
             startInfo.ArgumentList.Add("-ac");
             startInfo.ArgumentList.Add("1");
             startInfo.ArgumentList.Add("-ar");
-            startInfo.ArgumentList.Add("8000");
+            startInfo.ArgumentList.Add(SpectrumSampleRate.ToString());
             startInfo.ArgumentList.Add("pipe:1");
 
             process = Process.Start(startInfo);
@@ -1219,13 +1501,21 @@ public partial class MainWindow : Window
             _signalProcess = process;
             _ = process.StandardError.ReadToEndAsync(cancellationToken);
 
-            var buffer = new byte[4096];
+            var buffer = new byte[SpectrumFftSize * sizeof(short)];
+            var hopBytes = SpectrumHopSize * sizeof(short);
+            var bufferedBytes = 0;
             while (!cancellationToken.IsCancellationRequested)
             {
-                var bytesRead = await process.StandardOutput.BaseStream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+                var bytesRead = await process.StandardOutput.BaseStream.ReadAsync(
+                    buffer.AsMemory(bufferedBytes, buffer.Length - bufferedBytes), cancellationToken);
                 if (bytesRead <= 0) break;
-                var level = CalculatePcmRms(buffer, bytesRead);
-                await Dispatcher.InvokeAsync(() => PushSignalLevel(level), DispatcherPriority.Background, cancellationToken);
+                bufferedBytes += bytesRead;
+                if (bufferedBytes < buffer.Length) continue;
+
+                var spectrum = CalculateSpectrum(buffer);
+                Buffer.BlockCopy(buffer, hopBytes, buffer, 0, buffer.Length - hopBytes);
+                bufferedBytes = buffer.Length - hopBytes;
+                await Dispatcher.InvokeAsync(() => PushSpectrum(spectrum), DispatcherPriority.Background, cancellationToken);
             }
         }
         catch (OperationCanceledException)
@@ -1260,60 +1550,105 @@ public partial class MainWindow : Window
         }
     }
 
-    private static double CalculatePcmRms(byte[] buffer, int bytesRead)
+    private static double[] CalculateSpectrum(byte[] pcmBuffer)
     {
-        var sampleCount = bytesRead / 2;
-        if (sampleCount <= 0) return 0;
+        var real = new double[SpectrumFftSize];
+        var imaginary = new double[SpectrumFftSize];
+        double sampleMean = 0;
+        for (var i = 0; i < SpectrumFftSize; i++)
+            sampleMean += BitConverter.ToInt16(pcmBuffer, i * sizeof(short)) / 32768.0;
+        sampleMean /= SpectrumFftSize;
 
-        double sumSquares = 0;
-        for (var i = 0; i < sampleCount * 2; i += 2)
+        for (var i = 0; i < SpectrumFftSize; i++)
         {
-            var sample = BitConverter.ToInt16(buffer, i) / 32768.0;
-            sumSquares += sample * sample;
+            var sample = (BitConverter.ToInt16(pcmBuffer, i * sizeof(short)) / 32768.0) - sampleMean;
+            var window = 0.5 * (1 - Math.Cos(2 * Math.PI * i / (SpectrumFftSize - 1)));
+            real[i] = sample * window;
         }
 
-        var rms = Math.Sqrt(sumSquares / sampleCount);
-        return Math.Clamp(rms, 0, 1);
+        FastFourierTransform(real, imaginary);
+
+        var spectrum = new double[SignalBarCount];
+        var frequencyRange = SpectrumMaxFrequency / SpectrumMinFrequency;
+        for (var band = 0; band < SignalBarCount; band++)
+        {
+            var lowerFrequency = SpectrumMinFrequency * Math.Pow(frequencyRange, band / (double)SignalBarCount);
+            var upperFrequency = SpectrumMinFrequency * Math.Pow(frequencyRange, (band + 1) / (double)SignalBarCount);
+            var firstBin = Math.Max(1, (int)Math.Floor(lowerFrequency * SpectrumFftSize / SpectrumSampleRate));
+            var lastBin = Math.Min((SpectrumFftSize / 2) - 1,
+                Math.Max(firstBin, (int)Math.Ceiling(upperFrequency * SpectrumFftSize / SpectrumSampleRate)));
+
+            double peakMagnitude = 0;
+            for (var bin = firstBin; bin <= lastBin; bin++)
+            {
+                var magnitude = Math.Sqrt((real[bin] * real[bin]) + (imaginary[bin] * imaginary[bin]));
+                peakMagnitude = Math.Max(peakMagnitude, magnitude * 2 / SpectrumFftSize);
+            }
+
+            var decibels = 20 * Math.Log10(Math.Max(peakMagnitude, 1e-9));
+            var normalized = Math.Clamp((decibels + 78) / 66, 0, 1);
+            spectrum[band] = Math.Pow(normalized, 0.82);
+        }
+
+        return spectrum;
     }
 
-    private void PushSignalLevel(double rawLevel)
+    private static void FastFourierTransform(double[] real, double[] imaginary)
     {
-        _signalReferenceLevel = rawLevel > _signalReferenceLevel
-            ? (_signalReferenceLevel * 0.75) + (rawLevel * 0.25)
-            : (_signalReferenceLevel * 0.995) + (rawLevel * 0.005);
-        _signalReferenceLevel = Math.Max(_signalReferenceLevel, SignalReferenceFloor);
+        var length = real.Length;
+        for (int source = 1, target = 0; source < length; source++)
+        {
+            var bit = length >> 1;
+            while ((target & bit) != 0)
+            {
+                target ^= bit;
+                bit >>= 1;
+            }
+            target ^= bit;
 
-        var visualLevel = rawLevel < 0.0008
-            ? 0
-            : Math.Clamp(rawLevel / (_signalReferenceLevel * 1.7), 0, 1);
+            if (source >= target) continue;
+            (real[source], real[target]) = (real[target], real[source]);
+            (imaginary[source], imaginary[target]) = (imaginary[target], imaginary[source]);
+        }
 
-        Array.Copy(_signalLevels, 1, _signalLevels, 0, _signalLevels.Length - 1);
-        _signalLevels[^1] = visualLevel;
-        RenderSignalBars();
+        for (var blockSize = 2; blockSize <= length; blockSize <<= 1)
+        {
+            var angle = -2 * Math.PI / blockSize;
+            var phaseStepReal = Math.Cos(angle);
+            var phaseStepImaginary = Math.Sin(angle);
+            for (var blockStart = 0; blockStart < length; blockStart += blockSize)
+            {
+                double phaseReal = 1;
+                double phaseImaginary = 0;
+                var halfBlock = blockSize >> 1;
+                for (var offset = 0; offset < halfBlock; offset++)
+                {
+                    var even = blockStart + offset;
+                    var odd = even + halfBlock;
+                    var oddReal = (phaseReal * real[odd]) - (phaseImaginary * imaginary[odd]);
+                    var oddImaginary = (phaseReal * imaginary[odd]) + (phaseImaginary * real[odd]);
+
+                    real[odd] = real[even] - oddReal;
+                    imaginary[odd] = imaginary[even] - oddImaginary;
+                    real[even] += oddReal;
+                    imaginary[even] += oddImaginary;
+
+                    var nextPhaseReal = (phaseReal * phaseStepReal) - (phaseImaginary * phaseStepImaginary);
+                    phaseImaginary = (phaseReal * phaseStepImaginary) + (phaseImaginary * phaseStepReal);
+                    phaseReal = nextPhaseReal;
+                }
+            }
+        }
+    }
+
+    private void PushSpectrum(double[] spectrum)
+    {
+        SignalDisplay.SetSpectrum(spectrum);
     }
 
     private void ResetSignalBars()
     {
-        Array.Clear(_signalLevels);
-        _signalReferenceLevel = SignalReferenceFloor;
-        RenderSignalBars();
-    }
-
-    private void RenderSignalBars()
-    {
-        for (var i = 0; i < _signalBars.Count; i++)
-        {
-            var level = Math.Clamp(_signalLevels[i], 0, 1);
-            var bar = _signalBars[i];
-            bar.Height = 2 + level * 20;
-            bar.Fill = level switch
-            {
-                > 0.8 => System.Windows.Media.Brushes.OrangeRed,
-                > 0.55 => System.Windows.Media.Brushes.Gold,
-                > 0.18 => (System.Windows.Media.Brush)FindResource("Accent"),
-                _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(68, 83, 98))
-            };
-        }
+        SignalDisplay.Reset();
     }
 
     private static string? FindFfmpegPath()
@@ -1398,9 +1733,10 @@ public partial class MainWindow : Window
                 await ReadExactlyAsync(stream, metadata, metadataLength, cancellationToken);
                 var text = DecodeIcyMetadata(metadata);
                 var title = ExtractStreamTitle(text);
+                var rating = ExtractIcySongRating(text);
                 await Dispatcher.InvokeAsync(() => AppendMetadata($"ICY metadata\n{text.Trim('\0', ' ')}"));
                 if (!string.IsNullOrWhiteSpace(title))
-                    await Dispatcher.InvokeAsync(() => ScheduleCurrentTrack(title));
+                    await Dispatcher.InvokeAsync(() => ScheduleCurrentTrack(title, rating));
                 var coverUrl = ExtractCoverArtUrl(text);
                 if (!string.IsNullOrWhiteSpace(coverUrl))
                     await Dispatcher.InvokeAsync(() => SetArtwork(coverUrl));
@@ -1440,8 +1776,9 @@ public partial class MainWindow : Window
                     var title = ExtractHlsAttribute(metadataLine, "title");
                     var artist = ExtractHlsAttribute(metadataLine, "artist");
                     var track = string.IsNullOrWhiteSpace(artist) ? title : $"{artist} — {title}";
+                    var rating = ExtractHlsSongRating(metadataLine);
                     if (!string.IsNullOrWhiteSpace(track))
-                        await Dispatcher.InvokeAsync(() => ScheduleCurrentTrack(track));
+                        await Dispatcher.InvokeAsync(() => ScheduleCurrentTrack(track, rating));
 
                     var artwork = ExtractHlsArtworkUrl(metadataLine);
                     if (!string.IsNullOrWhiteSpace(artwork))
@@ -1493,6 +1830,59 @@ public partial class MainWindow : Window
         return match.Success ? match.Groups["value"].Value : null;
     }
 
+    private static int? ExtractHlsSongRating(string line)
+    {
+        foreach (var name in new[] { "songrating", "trackrating", "rating", "popularimeter", "popm" })
+        {
+            var value = ExtractHlsAttribute(line, name);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                var match = Regex.Match(line,
+                    $@"\b{Regex.Escape(name)}\s*=\s*(?<value>[^,\s]+)", RegexOptions.IgnoreCase);
+                value = match.Success ? match.Groups["value"].Value.Trim(' ', '\'', '"') : null;
+            }
+
+            var rating = ParseMetadataSongRating(value);
+            if (rating.HasValue) return rating;
+        }
+
+        return null;
+    }
+
+    private static int? ParseMetadataSongRating(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+
+        var filledStars = value.Count(character => character == '★');
+        if (filledStars > 0) return Math.Clamp(filledStars, 0, 5);
+
+        var match = Regex.Match(value, @"(?<rating>\d+(?:[.,]\d+)?)\s*(?:/\s*(?<maximum>\d+(?:[.,]\d+)?))?");
+        if (!match.Success) return null;
+
+        static bool TryReadNumber(string text, out double number) => double.TryParse(
+            text.Replace(',', '.'), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out number);
+
+        if (!TryReadNumber(match.Groups["rating"].Value, out var rawRating) || rawRating < 0)
+            return null;
+
+        double fiveStarRating;
+        if (match.Groups["maximum"].Success
+            && TryReadNumber(match.Groups["maximum"].Value, out var maximum)
+            && maximum > 0)
+            fiveStarRating = rawRating / maximum * 5;
+        else if (rawRating <= 5)
+            fiveStarRating = rawRating;
+        else if (rawRating <= 100)
+            fiveStarRating = rawRating / 20;
+        else if (rawRating <= 255)
+            fiveStarRating = rawRating / 51;
+        else
+            return null;
+
+        return Math.Clamp((int)Math.Round(fiveStarRating, MidpointRounding.AwayFromZero), 0, 5);
+    }
+
     private static string? ExtractHlsArtworkUrl(string line)
     {
         var match = Regex.Match(line, @"amgArtworkURL=\\?""(?<url>https?[^""\\]+)", RegexOptions.IgnoreCase);
@@ -1542,6 +1932,25 @@ public partial class MainWindow : Window
     private static string? ExtractStreamTitle(string metadata)
     {
         return ExtractMetadataValue(metadata, "StreamTitle");
+    }
+
+    private static int? ExtractIcySongRating(string metadata)
+    {
+        foreach (var name in new[] { "SongRating", "TrackRating", "Rating", "Popularimeter", "POPM" })
+        {
+            var value = ExtractMetadataValue(metadata, name);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                var match = Regex.Match(metadata,
+                    $@"(?:^|;)\s*{Regex.Escape(name)}\s*=\s*(?<value>[^;\0]+)", RegexOptions.IgnoreCase);
+                value = match.Success ? match.Groups["value"].Value.Trim(' ', '\'', '"') : null;
+            }
+
+            var rating = ParseMetadataSongRating(value);
+            if (rating.HasValue) return rating;
+        }
+
+        return null;
     }
 
     private static string DecodeIcyMetadata(byte[] metadata)
@@ -1615,20 +2024,23 @@ public partial class MainWindow : Window
             SetArtworkFrameMetadataState();
             SaveCurrentStationToHistory();
             UpdateCurrentUrlHistoryMetadata();
+            UpdateSongRatingDisplay();
         }
     }
 
-    private void SetCurrentTrack(string title)
+    private void SetCurrentTrack(string title, int? metadataRating = null)
     {
         var normalizedTitle = NormalizeTitle(title);
         var songKey = BuildSongCompareKey(title);
-        if (!string.IsNullOrWhiteSpace(normalizedTitle)
-            && !string.Equals(_currentTrackKey, songKey, StringComparison.OrdinalIgnoreCase))
+        var trackChanged = !string.IsNullOrWhiteSpace(normalizedTitle)
+            && !string.Equals(_currentTrackKey, songKey, StringComparison.OrdinalIgnoreCase);
+        if (trackChanged)
         {
             var canLockTrackStart = _hasObservedTrackMetadata;
             LogAppEvent("TRACK CHANGED", $"from: {_currentTrackTitle ?? "—"}\nto: {normalizedTitle}\nkey: {songKey}\nbuffer position: {_audioBuffer.CurrentPosition}");
             _currentTrackTitle = normalizedTitle;
             _currentTrackKey = songKey;
+            _currentMetadataSongRating = metadataRating;
             _currentTrackStartPosition = _audioBuffer.CurrentPosition;
             _currentTrackStartedAt = DateTime.Now;
             _hasObservedTrackMetadata = true;
@@ -1638,28 +2050,46 @@ public partial class MainWindow : Window
             else
                 SetArtworkFrameMetadataState();
         }
+        else if (metadataRating.HasValue)
+        {
+            _currentMetadataSongRating = metadataRating;
+        }
 
         SetTrackText(title);
         SetMetaStatusKey("MetadataUpdated");
+        UpdateSongRatingDisplay();
         if (string.Equals(_lastArtworkQuery, title, StringComparison.Ordinal)) return;
         _lastArtworkQuery = title;
         _ = FindArtworkAsync(title, _metadataCancellation?.Token ?? CancellationToken.None);
     }
 
-    private void ScheduleCurrentTrack(string title)
+    private void ScheduleCurrentTrack(string title, int? metadataRating = null)
     {
         var normalizedTitle = NormalizeTitle(title);
         var songKey = BuildSongCompareKey(normalizedTitle);
         if (string.IsNullOrWhiteSpace(normalizedTitle) || string.IsNullOrWhiteSpace(songKey)) return;
 
-        if (string.Equals(_currentTrackKey, songKey, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(_pendingTrackKey, songKey, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(_currentTrackKey, songKey, StringComparison.OrdinalIgnoreCase))
+        {
+            if (metadataRating.HasValue)
+            {
+                _currentMetadataSongRating = metadataRating;
+                UpdateSongRatingDisplay();
+            }
             return;
+        }
+
+        if (string.Equals(_pendingTrackKey, songKey, StringComparison.OrdinalIgnoreCase))
+        {
+            if (metadataRating.HasValue) _pendingTrackMetadataRating = metadataRating;
+            return;
+        }
 
         _isTrackStartLocked = false;
         SetArtworkFrameMetadataState();
         CancelPendingTrackUpdate();
         _pendingTrackKey = songKey;
+        _pendingTrackMetadataRating = metadataRating;
         _pendingTrackCancellation = new CancellationTokenSource();
         var token = _pendingTrackCancellation.Token;
         LogAppEvent("TRACK UPDATE SCHEDULED", $"title: {normalizedTitle}\nkey: {songKey}\ndelay: {MetadataTrackDelay.TotalSeconds:0}s");
@@ -1675,8 +2105,9 @@ public partial class MainWindow : Window
             await Dispatcher.InvokeAsync(() =>
             {
                 if (cancellationToken.IsCancellationRequested) return;
-                SetCurrentTrack(title);
+                SetCurrentTrack(title, _pendingTrackMetadataRating);
                 _pendingTrackKey = null;
+                _pendingTrackMetadataRating = null;
                 _pendingTrackCancellation?.Dispose();
                 _pendingTrackCancellation = null;
             });
@@ -1692,6 +2123,7 @@ public partial class MainWindow : Window
         _pendingTrackCancellation?.Dispose();
         _pendingTrackCancellation = null;
         _pendingTrackKey = null;
+        _pendingTrackMetadataRating = null;
     }
 
     private void UpdateCurrentUrlHistoryMetadata()
@@ -1711,8 +2143,7 @@ public partial class MainWindow : Window
 
     private static string NormalizeTitle(string title)
     {
-        var clean = Regex.Replace(title, @"\s*\|\|.*$", "", RegexOptions.Singleline);
-        return Regex.Replace(clean, @"\s+", " ").Trim();
+        return TrackMetadataNormalizer.NormalizeTitle(title);
     }
 
     private static string BuildSongCompareKey(string? title)
@@ -1989,7 +2420,6 @@ public partial class MainWindow : Window
     {
         MetaStationText.Text = station;
         MetaDescriptionText.Text = description;
-        MetaUrlText.Text = streamUrl;
         SetMetaStatusKey(statusKey);
         ArtworkCaptionText.Text = station.ToUpperInvariant();
     }
@@ -1997,12 +2427,23 @@ public partial class MainWindow : Window
     private void SaveCurrentStationToHistory()
     {
         var streamUrl = StreamUrlBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(streamUrl)) return;
+        if (string.IsNullOrWhiteSpace(streamUrl)
+            || !string.Equals(_historyWritableStreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase))
+            return;
 
         var station = new RadioStation(StationNameText.Text, MetaDescriptionText.Text, streamUrl, DateTime.Now);
-        var existing = _history.FirstOrDefault(item => string.Equals(item.StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase));
-        if (existing is not null) _history.Remove(existing);
-        _history.Insert(0, station);
+        var existingIndex = -1;
+        for (var index = 0; index < _history.Count; index++)
+        {
+            if (!string.Equals(_history[index].StreamUrl, streamUrl, StringComparison.OrdinalIgnoreCase)) continue;
+            existingIndex = index;
+            break;
+        }
+
+        if (existingIndex < 0)
+            _history.Add(station);
+        else
+            _history[existingIndex] = station;
         SaveHistory();
     }
 
@@ -2056,6 +2497,92 @@ public partial class MainWindow : Window
         }
     }
 
+    private void LoadUrlRatings()
+    {
+        try
+        {
+            if (!File.Exists(_urlRatingsPath)) return;
+            var ratings = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(_urlRatingsPath));
+            if (ratings is null) return;
+
+            foreach (var (url, rating) in ratings)
+            {
+                if (!string.IsNullOrWhiteSpace(url) && rating is >= 1 and <= 5)
+                    _urlRatings[url] = rating;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private void SaveUrlRatings()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_urlRatingsPath)!);
+            var orderedRatings = new SortedDictionary<string, int>(_urlRatings, StringComparer.OrdinalIgnoreCase);
+            File.WriteAllText(_urlRatingsPath,
+                JsonSerializer.Serialize(orderedRatings, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private void LoadSongRatings()
+    {
+        try
+        {
+            if (!File.Exists(_songRatingsPath)) return;
+            var ratings = JsonSerializer.Deserialize<Dictionary<string, SongRatingEntry>>(
+                File.ReadAllText(_songRatingsPath));
+            if (ratings is null) return;
+
+            foreach (var (key, entry) in ratings)
+            {
+                if (!string.IsNullOrWhiteSpace(key) && entry.Rating is >= 0 and <= 5)
+                    _songRatings[key] = entry;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private void SaveSongRatings()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_songRatingsPath)!);
+            var orderedRatings = new SortedDictionary<string, SongRatingEntry>(
+                _songRatings, StringComparer.OrdinalIgnoreCase);
+            File.WriteAllText(_songRatingsPath,
+                JsonSerializer.Serialize(orderedRatings, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private void LoadAppState()
     {
         try
@@ -2068,7 +2595,7 @@ public partial class MainWindow : Window
             if (state.WasPlaying)
             {
                 StationNameText.Text = L("MyStream");
-                StartPlayback();
+                StartPlayback(origin: PlaybackOrigin.Restored);
             }
         }
         catch (JsonException)
@@ -2243,7 +2770,9 @@ public partial class MainWindow : Window
             if (!File.Exists(_historyPath)) return;
             var stations = JsonSerializer.Deserialize<List<RadioStation>>(File.ReadAllText(_historyPath));
             if (stations is null) return;
-            foreach (var station in stations.Where(station => !string.IsNullOrWhiteSpace(station.StreamUrl)))
+            foreach (var station in stations
+                         .Where(station => !string.IsNullOrWhiteSpace(station.StreamUrl))
+                         .OrderBy(station => station.PlayedAt ?? DateTime.MinValue))
                 _history.Add(station);
         }
         catch (JsonException)
@@ -2306,7 +2835,9 @@ public partial class MainWindow : Window
                 var stations = JsonSerializer.Deserialize<List<RadioStation>>(File.ReadAllText(_playlistPath));
                 if (stations is not null)
                 {
-                    foreach (var station in stations.Where(station => !string.IsNullOrWhiteSpace(station.StreamUrl)))
+                    foreach (var station in stations
+                                 .Where(station => !string.IsNullOrWhiteSpace(station.StreamUrl))
+                                 .OrderBy(station => station.PlayedAt ?? DateTime.MinValue))
                         _stations.Add(station);
                 }
             }
@@ -2326,7 +2857,31 @@ public partial class MainWindow : Window
     }
 }
 
-public sealed record RadioStation(string Name, string Description, string StreamUrl, DateTime? PlayedAt = null);
+public sealed record RadioStation(string Name, string Description, string StreamUrl, DateTime? PlayedAt = null) : INotifyPropertyChanged
+{
+    private string _urlRatingStars = string.Empty;
+
+    [JsonIgnore]
+    public string UrlRatingStars
+    {
+        get => _urlRatingStars;
+        set
+        {
+            if (_urlRatingStars == value) return;
+            _urlRatingStars = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UrlRatingStars)));
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
+
+public sealed record SongRatingEntry(
+    string Artist,
+    string Title,
+    string Genre,
+    int Rating,
+    DateTime UpdatedAt);
 
 public sealed record ActiveRecordingState(
     string TrackKey,
